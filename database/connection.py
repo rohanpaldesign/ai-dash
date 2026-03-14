@@ -5,8 +5,10 @@ Returns a libsql (Turso cloud) connection when TURSO_URL + TURSO_TOKEN are set,
 otherwise falls back to local SQLite.
 """
 
+import json
 import os
 import sqlite3
+import urllib.request
 from pathlib import Path
 
 import pandas as pd
@@ -42,15 +44,61 @@ def get_connection():
     return conn
 
 
+def _turso_cell(cell):
+    """Convert a Turso HTTP API cell to a Python value."""
+    t = cell["type"]
+    if t == "null":
+        return None
+    v = cell["value"]
+    if t == "integer":
+        return int(v)
+    if t in ("float", "real"):
+        return float(v)
+    return v  # text / blob
+
+
 def query_df(sql: str, params: tuple = ()) -> pd.DataFrame:
-    """Execute SELECT and return DataFrame. Works for both sqlite3 and libsql.
-    (pandas.read_sql_query is NOT used — it fails with libsql connections.)"""
-    with get_connection() as db:
-        try:
-            db.sync()  # Force libsql embedded replica to pull latest from Turso
-        except Exception:
-            pass  # sqlite3 and older libsql versions don't have sync()
-        cur = db.execute(sql, params)
+    """Execute SELECT and return DataFrame.
+
+    Uses Turso HTTP API when credentials are available (always fresh, no
+    embedded-replica staleness). Falls back to local sqlite3 otherwise.
+    """
+    url, token = _get_turso_creds()
+    if url and token:
+        http_url = url.replace("libsql://", "https://") + "/v2/pipeline"
+        args = []
+        for p in params:
+            if p is None:
+                args.append({"type": "null"})
+            elif isinstance(p, int):
+                args.append({"type": "integer", "value": str(p)})
+            elif isinstance(p, float):
+                args.append({"type": "float", "value": str(p)})
+            else:
+                args.append({"type": "text", "value": str(p)})
+        body = json.dumps({
+            "requests": [
+                {"type": "execute", "stmt": {"sql": sql, "args": args}},
+                {"type": "close"},
+            ]
+        }).encode()
+        req = urllib.request.Request(
+            http_url,
+            data=body,
+            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(req) as resp:
+            data = json.loads(resp.read())
+        result = data["results"][0]["response"]["result"]
+        cols = [c["name"] for c in result["cols"]]
+        rows = [[_turso_cell(cell) for cell in row] for row in result["rows"]]
+        return pd.DataFrame(rows, columns=cols)
+
+    # SQLite fallback
+    conn = sqlite3.connect(_LOCAL_DB)
+    conn.row_factory = sqlite3.Row
+    with conn:
+        cur = conn.execute(sql, params)
         cols = [d[0] for d in cur.description]
         rows = cur.fetchall()
     return pd.DataFrame(rows, columns=cols)

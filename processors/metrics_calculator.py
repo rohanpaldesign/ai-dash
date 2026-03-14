@@ -7,6 +7,7 @@ Also computes commits_after_ai from raw_events commit records.
 """
 
 import logging
+import sqlite3
 import sys
 from pathlib import Path
 

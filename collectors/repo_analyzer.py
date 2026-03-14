@@ -9,6 +9,7 @@ commit events to raw_events.
 
 import json
 import logging
+import sqlite3
 import sys
 import subprocess
 import time

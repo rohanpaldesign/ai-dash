@@ -488,9 +488,21 @@ def main() -> None:
         )
         st.divider()
         if st.button("Refresh Data"):
-            st.cache_data.clear()
+            load_daily_metrics.clear()
+            load_sessions.clear()
+            load_raw_events.clear()
             st.rerun()
         st.caption(f"Last refresh: {datetime.now().strftime('%H:%M:%S')}")
+
+        # Debug: show backend + row count
+        try:
+            from database.connection import _get_turso_creds
+            url, _ = _get_turso_creds()
+            backend = "Turso" if url else "SQLite (fallback!)"
+            row_count = query_df("SELECT COUNT(*) AS n FROM daily_metrics").iloc[0]["n"]
+            st.caption(f"Backend: {backend} | Rows: {int(row_count)}")
+        except Exception as e:
+            st.caption(f"Backend check error: {e}")
 
     if page == "Overview":
         page_overview(config)

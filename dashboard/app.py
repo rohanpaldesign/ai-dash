@@ -87,23 +87,68 @@ def load_raw_events(days: int = 30) -> pd.DataFrame:
     return df
 
 
+@st.cache_data(ttl=60)
+def load_today_live() -> pd.DataFrame:
+    """Query today's KPIs directly from raw_events and sessions (no aggregation delay)."""
+    today_str = datetime.now().strftime("%Y-%m-%d")
+
+    # Active minutes from window events (cursor, chatgpt, gemini)
+    window_min = query_df(
+        "SELECT tool, SUM(duration_seconds)/60.0 AS active_minutes "
+        "FROM raw_events WHERE event_type='window_active' AND DATE(timestamp)=? "
+        "AND tool != 'claude_code' GROUP BY tool",
+        (today_str,),
+    )
+
+    # Claude Code active minutes from session spans (hooks don't emit window_active)
+    cc_min = query_df(
+        "SELECT 'claude_code' AS tool, "
+        "COALESCE(SUM((julianday(end_time)-julianday(start_time))*86400)/60.0, 0) AS active_minutes "
+        "FROM sessions WHERE tool='claude_code' AND DATE(start_time)=?",
+        (today_str,),
+    )
+
+    # Session counts per tool
+    sess_counts = query_df(
+        "SELECT tool, COUNT(*) AS session_count FROM sessions WHERE DATE(start_time)=? GROUP BY tool",
+        (today_str,),
+    )
+
+    # Prompt counts and estimated tokens (claude_code hook events)
+    prompt_stats = query_df(
+        "SELECT tool, COUNT(*) AS prompt_count, COALESCE(SUM(estimated_tokens), 0) AS estimated_tokens "
+        "FROM raw_events WHERE event_type='prompt' AND DATE(timestamp)=? GROUP BY tool",
+        (today_str,),
+    )
+
+    active_min = pd.concat([window_min, cc_min], ignore_index=True)
+    active_min = active_min[active_min["active_minutes"].notna() & (active_min["active_minutes"] > 0)]
+
+    if active_min.empty:
+        return pd.DataFrame(columns=["tool", "active_minutes", "session_count", "prompt_count", "estimated_tokens"])
+
+    result = active_min.copy()
+    result = result.merge(sess_counts, on="tool", how="left") if not sess_counts.empty else result.assign(session_count=0)
+    result = result.merge(prompt_stats, on="tool", how="left") if not prompt_stats.empty else result.assign(prompt_count=0, estimated_tokens=0)
+    return result.fillna(0)
+
+
 # ── Page 1: Overview ──────────────────────────────────────────────────────────
 
 def page_overview(config: dict) -> None:
     st.title("AI Usage Overview")
 
-    daily = load_daily_metrics(30)
-    today_str = datetime.now().strftime("%Y-%m-%d")
-    today = daily[daily["date"] == today_str] if not daily.empty else pd.DataFrame()
+    today_live = load_today_live()  # live from raw_events + sessions (~60s freshness)
+    daily = load_daily_metrics(30)  # used for 30-day trend chart only
 
     # KPI row
     col1, col2, col3, col4 = st.columns(4)
 
-    if not today.empty:
-        total_min = today["active_minutes"].sum()
-        total_sessions = today["session_count"].sum()
-        total_prompts = today["prompt_count"].sum()
-        total_tokens = today["estimated_tokens"].sum()
+    if not today_live.empty:
+        total_min = today_live["active_minutes"].sum()
+        total_sessions = today_live["session_count"].sum()
+        total_prompts = today_live["prompt_count"].sum()
+        total_tokens = today_live["estimated_tokens"].sum()
     else:
         total_min = total_sessions = total_prompts = total_tokens = 0
 
@@ -115,9 +160,9 @@ def page_overview(config: dict) -> None:
     st.divider()
 
     # Today's tool breakdown bar
-    if not today.empty:
+    if not today_live.empty and total_min > 0:
         st.subheader("Today's Time by Tool")
-        today_chart = today.copy()
+        today_chart = today_live.copy()
         today_chart["tool_name"] = today_chart["tool"].apply(lambda t: tool_name(t, config))
         fig = px.bar(
             today_chart.sort_values("active_minutes", ascending=True),
@@ -161,7 +206,142 @@ def page_overview(config: dict) -> None:
         st.info("No data in the last 30 days.")
 
 
-# ── Page 2: Tool Breakdown ────────────────────────────────────────────────────
+# ── Page 2: Claude Metrics ────────────────────────────────────────────────────
+
+@st.cache_data(ttl=60)
+def load_claude_metrics(since: str, until: str) -> dict:
+    """Load prompts, tokens, and edit counts from raw_events for a date range."""
+    prompts = query_df(
+        "SELECT DATE(timestamp) AS date, COUNT(*) AS prompts "
+        "FROM raw_events WHERE event_type='prompt' AND tool='claude_code' "
+        "AND DATE(timestamp) BETWEEN ? AND ? GROUP BY DATE(timestamp) ORDER BY date",
+        (since, until),
+    )
+    tokens = query_df(
+        "SELECT DATE(timestamp) AS date, "
+        "SUM(input_tokens) AS input_tokens, SUM(output_tokens) AS output_tokens, "
+        "SUM(cache_read_tokens) AS cache_read_tokens, SUM(cache_creation_tokens) AS cache_creation_tokens "
+        "FROM raw_events WHERE event_type='stop' AND tool='claude_code' "
+        "AND input_tokens IS NOT NULL "
+        "AND DATE(timestamp) BETWEEN ? AND ? GROUP BY DATE(timestamp) ORDER BY date",
+        (since, until),
+    )
+    edits = query_df(
+        "SELECT DATE(timestamp) AS date, COUNT(*) AS edits_accepted "
+        "FROM raw_events WHERE event_type='tool_call' AND tool='claude_code' "
+        "AND tool_name IN ('Edit','Write','NotebookEdit') AND success=1 "
+        "AND DATE(timestamp) BETWEEN ? AND ? GROUP BY DATE(timestamp) ORDER BY date",
+        (since, until),
+    )
+    return {"prompts": prompts, "tokens": tokens, "edits": edits}
+
+
+def page_claude_metrics(config: dict) -> None:
+    st.title("Claude Code Metrics")
+
+    col_a, col_b = st.columns(2)
+    with col_a:
+        date_range = st.date_input(
+            "Date range",
+            value=(
+                datetime.now().date() - timedelta(days=29),
+                datetime.now().date(),
+            ),
+            max_value=datetime.now().date(),
+        )
+    # date_input returns a tuple when range is selected, or a single date while selecting
+    if isinstance(date_range, (list, tuple)) and len(date_range) == 2:
+        since, until = str(date_range[0]), str(date_range[1])
+    else:
+        since = until = str(date_range[0] if isinstance(date_range, (list, tuple)) else date_range)
+
+    data = load_claude_metrics(since, until)
+    prompts_df = data["prompts"]
+    tokens_df = data["tokens"]
+    edits_df = data["edits"]
+
+    # KPI row
+    total_prompts = int(prompts_df["prompts"].sum()) if not prompts_df.empty else 0
+    total_input = int(tokens_df["input_tokens"].sum()) if not tokens_df.empty else 0
+    total_output = int(tokens_df["output_tokens"].sum()) if not tokens_df.empty else 0
+    total_edits = int(edits_df["edits_accepted"].sum()) if not edits_df.empty else 0
+    total_cache_read = int(tokens_df["cache_read_tokens"].sum()) if not tokens_df.empty else 0
+
+    k1, k2, k3, k4, k5 = st.columns(5)
+    k1.metric("Prompts", f"{total_prompts:,}")
+    k2.metric("Input Tokens", f"{total_input:,}")
+    k3.metric("Output Tokens", f"{total_output:,}")
+    k4.metric("Cache Read Tokens", f"{total_cache_read:,}")
+    k5.metric("Edits Accepted", f"{total_edits:,}")
+
+    st.divider()
+
+    # Prompts per day
+    st.subheader("Prompts per Day")
+    if not prompts_df.empty:
+        fig = px.bar(
+            prompts_df, x="date", y="prompts",
+            labels={"date": "Date", "prompts": "Prompts"},
+            color_discrete_sequence=[tool_color("claude_code", config)],
+        )
+        fig.update_layout(height=280)
+        st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.info("No prompt data in range. Prompts are captured via the UserPromptSubmit hook.")
+
+    st.divider()
+
+    # Tokens per day
+    st.subheader("Tokens per Day")
+    if not tokens_df.empty:
+        fig = go.Figure()
+        fig.add_trace(go.Bar(
+            name="Input", x=tokens_df["date"], y=tokens_df["input_tokens"],
+            marker_color="#4A9EFF",
+        ))
+        fig.add_trace(go.Bar(
+            name="Output", x=tokens_df["date"], y=tokens_df["output_tokens"],
+            marker_color="#F4B400",
+        ))
+        fig.add_trace(go.Bar(
+            name="Cache Read", x=tokens_df["date"], y=tokens_df["cache_read_tokens"],
+            marker_color="#34A853",
+        ))
+        fig.add_trace(go.Bar(
+            name="Cache Creation", x=tokens_df["date"], y=tokens_df["cache_creation_tokens"],
+            marker_color="#EA4335",
+        ))
+        fig.update_layout(barmode="stack", height=300, legend_title="Token Type",
+                          xaxis_title="Date", yaxis_title="Tokens")
+        st.plotly_chart(fig, use_container_width=True)
+        st.caption(
+            "Tokens are read from the session JSONL transcript at session end (Stop hook). "
+            "Sessions still in progress will appear in the next run."
+        )
+    else:
+        st.info(
+            "No token data yet. Token counts are captured when a Claude Code session ends "
+            "(Stop hook reads the session transcript). Make sure the hook is configured."
+        )
+
+    st.divider()
+
+    # Edits accepted per day
+    st.subheader("Edits Accepted per Day")
+    if not edits_df.empty:
+        fig = px.bar(
+            edits_df, x="date", y="edits_accepted",
+            labels={"date": "Date", "edits_accepted": "Edits Accepted"},
+            color_discrete_sequence=[tool_color("claude_code", config)],
+        )
+        fig.update_layout(height=280)
+        st.plotly_chart(fig, use_container_width=True)
+        st.caption("Counts Edit, Write, and NotebookEdit tool calls that completed successfully.")
+    else:
+        st.info("No edit data in range.")
+
+
+# ── Page 3: Tool Breakdown ────────────────────────────────────────────────────
 
 def page_tool_breakdown(config: dict) -> None:
     st.title("Tool Breakdown")
@@ -480,6 +660,7 @@ def main() -> None:
             "Navigate",
             [
                 "Overview",
+                "Claude Metrics",
                 "Tool Breakdown",
                 "Session Analytics",
                 "Time Heatmap",
@@ -488,15 +669,19 @@ def main() -> None:
         )
         st.divider()
         if st.button("Refresh Data"):
+            load_today_live.clear()
             load_daily_metrics.clear()
             load_sessions.clear()
             load_raw_events.clear()
+            load_claude_metrics.clear()
             st.rerun()
         st.caption(f"Last refresh: {datetime.now().strftime('%H:%M:%S')}")
 
 
     if page == "Overview":
         page_overview(config)
+    elif page == "Claude Metrics":
+        page_claude_metrics(config)
     elif page == "Tool Breakdown":
         page_tool_breakdown(config)
     elif page == "Session Analytics":

@@ -1,0 +1,31 @@
+name: Aggregate Metrics
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+
+jobs:
+  aggregate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install libsql pandas pyyaml
+
+      - name: Run sessionizer
+        env:
+          TURSO_URL: ${{ secrets.TURSO_URL }}
+          TURSO_TOKEN: ${{ secrets.TURSO_TOKEN }}
+        run: python -m processors.sessionizer
+
+      - name: Run metrics calculator
+        env:
+          TURSO_URL: ${{ secrets.TURSO_URL }}
+          TURSO_TOKEN: ${{ secrets.TURSO_TOKEN }}
+        run: python -m processors.metrics_calculator

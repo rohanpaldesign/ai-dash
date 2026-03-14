@@ -2,7 +2,7 @@
 claude_hook.py — Claude Code hook logger.
 
 Called by Claude Code on every hook event. Reads JSON from stdin,
-writes a raw_event to the SQLite database.
+writes a raw_event to the database.
 
 Configure in ~/.claude/settings.json:
   "hooks": {
@@ -40,18 +40,53 @@ def extract_repo(cwd: str | None) -> str | None:
     return None
 
 
+def parse_transcript_tokens(transcript_path: str) -> dict:
+    """Sum token usage across all assistant messages in the session JSONL transcript."""
+    totals = {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cache_read_tokens": 0,
+        "cache_creation_tokens": 0,
+    }
+    try:
+        path = Path(transcript_path)
+        if not path.exists():
+            return totals
+        for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if record.get("type") != "assistant":
+                continue
+            usage = record.get("message", {}).get("usage", {})
+            totals["input_tokens"] += usage.get("input_tokens", 0) or 0
+            totals["output_tokens"] += usage.get("output_tokens", 0) or 0
+            totals["cache_read_tokens"] += usage.get("cache_read_input_tokens", 0) or 0
+            totals["cache_creation_tokens"] += usage.get("cache_creation_input_tokens", 0) or 0
+    except Exception:
+        pass
+    return totals
+
+
 def handle_event(data: dict) -> None:
     hook_event = data.get("hook_event_name", "")
     session_id = data.get("session_id")
     cwd = data.get("cwd") or os.getcwd()
     repo = extract_repo(cwd)
 
-    # Map hook event → event_type + field extraction
     event_type = "unknown"
     prompt_chars = None
     estimated_tokens = None
     tool_name = None
     success = None
+    input_tokens = None
+    output_tokens = None
+    cache_read_tokens = None
+    cache_creation_tokens = None
     metadata = {}
 
     if hook_event == "UserPromptSubmit":
@@ -80,6 +115,12 @@ def handle_event(data: dict) -> None:
 
     elif hook_event == "Stop":
         event_type = "stop"
+        transcript_path = data.get("transcript_path", "")
+        tokens = parse_transcript_tokens(transcript_path) if transcript_path else {}
+        input_tokens = tokens.get("input_tokens") or None
+        output_tokens = tokens.get("output_tokens") or None
+        cache_read_tokens = tokens.get("cache_read_tokens") or None
+        cache_creation_tokens = tokens.get("cache_creation_tokens") or None
         metadata = {"stop_reason": data.get("stop_reason")}
 
     else:
@@ -90,8 +131,10 @@ def handle_event(data: dict) -> None:
             """
             INSERT INTO raw_events
               (timestamp, tool, event_type, session_id, repo, cwd,
-               prompt_chars, estimated_tokens, tool_name, success, metadata_json)
-            VALUES (?, 'claude_code', ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               prompt_chars, estimated_tokens, tool_name, success,
+               input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
+               metadata_json)
+            VALUES (?, 'claude_code', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 now_iso(),
@@ -103,6 +146,10 @@ def handle_event(data: dict) -> None:
                 estimated_tokens,
                 tool_name,
                 success,
+                input_tokens,
+                output_tokens,
+                cache_read_tokens,
+                cache_creation_tokens,
                 json.dumps(metadata) if metadata else None,
             ),
         )

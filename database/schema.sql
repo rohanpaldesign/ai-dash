@@ -11,10 +11,14 @@ CREATE TABLE IF NOT EXISTS raw_events (
     window_title     TEXT,
     prompt_chars     INTEGER,
     estimated_tokens INTEGER,
-    tool_name        TEXT,                   -- bash / edit / search / etc.
-    success          INTEGER,                -- 1/0 for tool calls
-    duration_seconds REAL,                  -- window active duration
-    metadata_json    TEXT                   -- extra hook data
+    tool_name              TEXT,             -- bash / edit / search / etc.
+    success                INTEGER,          -- 1/0 for tool calls
+    duration_seconds       REAL,             -- window active duration
+    input_tokens           INTEGER,          -- actual input tokens (Stop event, from JSONL)
+    output_tokens          INTEGER,          -- actual output tokens (Stop event, from JSONL)
+    cache_read_tokens      INTEGER,          -- cache_read_input_tokens
+    cache_creation_tokens  INTEGER,          -- cache_creation_input_tokens
+    metadata_json          TEXT              -- extra hook data
 );
 
 CREATE INDEX IF NOT EXISTS idx_raw_events_timestamp ON raw_events(timestamp);

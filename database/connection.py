@@ -22,6 +22,22 @@ def _get_turso_creds():
     token = os.environ.get("TURSO_TOKEN")
     if url and token:
         return url, token
+
+    # Fallback: read directly from Windows user env registry.
+    # Handles subprocesses (e.g. Claude Code hooks) that don't inherit
+    # env vars set via setx after the parent process was launched.
+    try:
+        import winreg
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment") as key:
+            if not url:
+                url, _ = winreg.QueryValueEx(key, "TURSO_URL")
+            if not token:
+                token, _ = winreg.QueryValueEx(key, "TURSO_TOKEN")
+    except Exception:
+        pass
+    if url and token:
+        return url, token
+
     try:
         import streamlit as st
         url = st.secrets.get("TURSO_URL")

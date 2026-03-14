@@ -32,8 +32,7 @@ def upsert_session(db: sqlite3.Connection, session: dict) -> None:
         INSERT INTO sessions
           (session_id, tool, start_time, end_time, active_seconds, repo,
            prompt_count, tool_call_count, failure_count)
-        VALUES (:session_id, :tool, :start_time, :end_time, :active_seconds, :repo,
-                :prompt_count, :tool_call_count, :failure_count)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(session_id) DO UPDATE SET
           end_time        = excluded.end_time,
           active_seconds  = excluded.active_seconds,
@@ -42,7 +41,11 @@ def upsert_session(db: sqlite3.Connection, session: dict) -> None:
           tool_call_count = excluded.tool_call_count,
           failure_count   = excluded.failure_count
         """,
-        session,
+        (
+            session["session_id"], session["tool"], session["start_time"],
+            session["end_time"], session["active_seconds"], session["repo"],
+            session["prompt_count"], session["tool_call_count"], session["failure_count"],
+        ),
     )
 
 

@@ -9,8 +9,11 @@ dashboard/app.py — AI Usage Dashboard (Streamlit).
   5. Repos & Productivity — top repos, commit-after-AI rate
 """
 
+import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import pandas as pd
 import plotly.express as px

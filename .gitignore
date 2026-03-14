@@ -1,0 +1,6 @@
+database/usage.db
+background.log
+migrate_to_turso.py
+.streamlit/secrets.toml
+__pycache__/
+*.pyc

@@ -46,6 +46,10 @@ def query_df(sql: str, params: tuple = ()) -> pd.DataFrame:
     """Execute SELECT and return DataFrame. Works for both sqlite3 and libsql.
     (pandas.read_sql_query is NOT used — it fails with libsql connections.)"""
     with get_connection() as db:
+        try:
+            db.sync()  # Force libsql embedded replica to pull latest from Turso
+        except Exception:
+            pass  # sqlite3 and older libsql versions don't have sync()
         cur = db.execute(sql, params)
         cols = [d[0] for d in cur.description]
         rows = cur.fetchall()

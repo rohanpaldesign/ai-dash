@@ -9,7 +9,9 @@ dashboard/app.py — AI Usage Dashboard (Streamlit).
   5. Repos & Productivity — top repos, commit-after-AI rate
 """
 
+import calendar as _calendar
 import sys
+from datetime import date as _date
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -209,136 +211,231 @@ def page_overview(config: dict) -> None:
 # ── Page 2: Claude Metrics ────────────────────────────────────────────────────
 
 @st.cache_data(ttl=60)
-def load_claude_metrics(since: str, until: str) -> dict:
-    """Load prompts, tokens, and edit counts from raw_events for a date range."""
+def load_claude_metrics(since: str, until: str, granularity: str) -> dict:
+    """Load prompts, tokens, and edits grouped by hour / day / month."""
+    if granularity == "hour":
+        grp = "CAST(strftime('%H', timestamp) AS INTEGER)"
+        col = "hour"
+    elif granularity == "month":
+        grp = "strftime('%Y-%m', timestamp)"
+        col = "month"
+    else:
+        grp = "DATE(timestamp)"
+        col = "date"
+
     prompts = query_df(
-        "SELECT DATE(timestamp) AS date, COUNT(*) AS prompts "
+        f"SELECT {grp} AS {col}, COUNT(*) AS prompts "
         "FROM raw_events WHERE event_type='prompt' AND tool='claude_code' "
-        "AND DATE(timestamp) BETWEEN ? AND ? GROUP BY DATE(timestamp) ORDER BY date",
+        f"AND DATE(timestamp) BETWEEN ? AND ? GROUP BY {grp} ORDER BY {grp}",
         (since, until),
     )
     tokens = query_df(
-        "SELECT DATE(timestamp) AS date, "
+        f"SELECT {grp} AS {col}, "
         "SUM(input_tokens) AS input_tokens, SUM(output_tokens) AS output_tokens, "
         "SUM(cache_read_tokens) AS cache_read_tokens, SUM(cache_creation_tokens) AS cache_creation_tokens "
         "FROM raw_events WHERE event_type='stop' AND tool='claude_code' "
-        "AND input_tokens IS NOT NULL "
-        "AND DATE(timestamp) BETWEEN ? AND ? GROUP BY DATE(timestamp) ORDER BY date",
+        f"AND input_tokens IS NOT NULL AND DATE(timestamp) BETWEEN ? AND ? GROUP BY {grp} ORDER BY {grp}",
         (since, until),
     )
     edits = query_df(
-        "SELECT DATE(timestamp) AS date, COUNT(*) AS edits_accepted "
+        f"SELECT {grp} AS {col}, COUNT(*) AS edits_accepted "
         "FROM raw_events WHERE event_type='tool_call' AND tool='claude_code' "
-        "AND tool_name IN ('Edit','Write','NotebookEdit') AND success=1 "
-        "AND DATE(timestamp) BETWEEN ? AND ? GROUP BY DATE(timestamp) ORDER BY date",
+        f"AND tool_name IN ('Edit','Write','NotebookEdit') AND success=1 "
+        f"AND DATE(timestamp) BETWEEN ? AND ? GROUP BY {grp} ORDER BY {grp}",
         (since, until),
     )
-    return {"prompts": prompts, "tokens": tokens, "edits": edits}
+    return {"prompts": prompts, "tokens": tokens, "edits": edits, "col": col}
+
+
+def _get_period_range(period: str, offset: int):
+    """Return (since, until, label, granularity, at_latest) for a period + offset."""
+    today = _date.today()
+
+    if period == "Today":
+        d = today + timedelta(days=offset)
+        label = "Today" if offset == 0 else d.strftime("%B %d, %Y")
+        return str(d), str(d), label, "hour", offset == 0
+
+    if period == "Week":
+        start_of_week = today - timedelta(days=today.weekday())
+        start = start_of_week + timedelta(weeks=offset)
+        end = min(start + timedelta(days=6), today)
+        label = "This Week" if offset == 0 else f"{start.strftime('%b %d')} – {end.strftime('%b %d, %Y')}"
+        return str(start), str(end), label, "day", offset == 0
+
+    if period == "Month":
+        year, month = today.year, today.month + offset
+        while month <= 0:
+            month += 12; year -= 1
+        while month > 12:
+            month -= 12; year += 1
+        start = _date(year, month, 1)
+        end = min(_date(year, month, _calendar.monthrange(year, month)[1]), today)
+        label = "This Month" if offset == 0 else start.strftime("%B %Y")
+        return str(start), str(end), label, "day", offset == 0
+
+    if period == "Year":
+        year = today.year + offset
+        start = _date(year, 1, 1)
+        end = min(_date(year, 12, 31), today)
+        label = "This Year" if offset == 0 else str(year)
+        return str(start), str(end), label, "month", offset == 0
+
+    return None, None, "", "day", True  # Custom — caller handles
+
+
+def _fill_gaps(df: pd.DataFrame, col: str, granularity: str, since: str, until: str) -> pd.DataFrame:
+    """Ensure every time slot in the range has a row, filling missing ones with 0."""
+    if granularity == "hour":
+        full = pd.DataFrame({col: list(range(24))})
+    elif granularity == "month":
+        periods = pd.period_range(
+            pd.Timestamp(since).to_period("M"),
+            pd.Timestamp(until).to_period("M"),
+            freq="M",
+        )
+        full = pd.DataFrame({col: [str(p) for p in periods]})
+    else:
+        full = pd.DataFrame({col: [
+            str(d.date()) for d in pd.date_range(since, until, freq="D")
+        ]})
+
+    if df.empty:
+        return full.assign(**{c: 0 for c in
+            ["prompts", "edits_accepted", "input_tokens", "output_tokens",
+             "cache_read_tokens", "cache_creation_tokens"]
+            if c not in full.columns})
+    return full.merge(df.astype({col: type(full[col].iloc[0])}), on=col, how="left").fillna(0)
 
 
 def page_claude_metrics(config: dict) -> None:
     st.title("Claude Code Metrics")
 
-    col_a, col_b = st.columns(2)
-    with col_a:
+    # ── Period selector ────────────────────────────────────────────────────────
+    if "metrics_period" not in st.session_state:
+        st.session_state["metrics_period"] = "Week"
+    if "metrics_offset" not in st.session_state:
+        st.session_state["metrics_offset"] = 0
+
+    def _reset_offset():
+        st.session_state["metrics_offset"] = 0
+
+    period = st.radio(
+        "",
+        ["Today", "Week", "Month", "Year", "Custom"],
+        index=["Today", "Week", "Month", "Year", "Custom"].index(
+            st.session_state.get("metrics_period", "Week")
+        ),
+        horizontal=True,
+        key="metrics_period",
+        on_change=_reset_offset,
+    )
+
+    # ── Navigation arrows ──────────────────────────────────────────────────────
+    if period != "Custom":
+        since, until, label, granularity, at_latest = _get_period_range(
+            period, st.session_state["metrics_offset"]
+        )
+        col_prev, col_label, col_next = st.columns([1, 6, 1])
+        with col_prev:
+            if st.button("◀", use_container_width=True, key="nav_prev"):
+                st.session_state["metrics_offset"] -= 1
+                st.rerun()
+        with col_label:
+            st.markdown(
+                f"<p style='text-align:center;font-size:1.1rem;font-weight:600;"
+                f"margin:0;padding-top:6px'>{label}</p>",
+                unsafe_allow_html=True,
+            )
+        with col_next:
+            if st.button("▶", use_container_width=True, key="nav_next", disabled=at_latest):
+                st.session_state["metrics_offset"] += 1
+                st.rerun()
+    else:
+        granularity = "day"
         date_range = st.date_input(
             "Date range",
-            value=(
-                datetime.now().date() - timedelta(days=29),
-                datetime.now().date(),
-            ),
+            value=(datetime.now().date() - timedelta(days=29), datetime.now().date()),
             max_value=datetime.now().date(),
         )
-    # date_input returns a tuple when range is selected, or a single date while selecting
-    if isinstance(date_range, (list, tuple)) and len(date_range) == 2:
-        since, until = str(date_range[0]), str(date_range[1])
+        if isinstance(date_range, (list, tuple)) and len(date_range) == 2:
+            since, until = str(date_range[0]), str(date_range[1])
+        else:
+            d = date_range[0] if isinstance(date_range, (list, tuple)) else date_range
+            since = until = str(d)
+
+    # ── Load & fill data ───────────────────────────────────────────────────────
+    data = load_claude_metrics(since, until, granularity)
+    col = data["col"]
+    prompts_df = _fill_gaps(data["prompts"], col, granularity, since, until)
+    tokens_df  = _fill_gaps(data["tokens"],  col, granularity, since, until)
+    edits_df   = _fill_gaps(data["edits"],   col, granularity, since, until)
+
+    # Format x-axis labels
+    if granularity == "hour":
+        x_label = "Hour"
+        for df in [prompts_df, tokens_df, edits_df]:
+            df[col] = df[col].astype(int)
+    elif granularity == "month":
+        x_label = "Month"
+        for df in [prompts_df, tokens_df, edits_df]:
+            df[col] = pd.to_datetime(df[col] + "-01").dt.strftime("%b %Y")
     else:
-        since = until = str(date_range[0] if isinstance(date_range, (list, tuple)) else date_range)
+        x_label = "Date"
 
-    data = load_claude_metrics(since, until)
-    prompts_df = data["prompts"]
-    tokens_df = data["tokens"]
-    edits_df = data["edits"]
-
-    # KPI row
-    total_prompts = int(prompts_df["prompts"].sum()) if not prompts_df.empty else 0
-    total_input = int(tokens_df["input_tokens"].sum()) if not tokens_df.empty else 0
-    total_output = int(tokens_df["output_tokens"].sum()) if not tokens_df.empty else 0
-    total_edits = int(edits_df["edits_accepted"].sum()) if not edits_df.empty else 0
-    total_cache_read = int(tokens_df["cache_read_tokens"].sum()) if not tokens_df.empty else 0
+    # ── KPIs ───────────────────────────────────────────────────────────────────
+    total_prompts    = int(prompts_df["prompts"].sum())         if "prompts"       in prompts_df.columns else 0
+    total_input      = int(tokens_df["input_tokens"].sum())     if "input_tokens"  in tokens_df.columns  else 0
+    total_output     = int(tokens_df["output_tokens"].sum())    if "output_tokens" in tokens_df.columns  else 0
+    total_cache_read = int(tokens_df["cache_read_tokens"].sum()) if "cache_read_tokens" in tokens_df.columns else 0
+    total_edits      = int(edits_df["edits_accepted"].sum())    if "edits_accepted" in edits_df.columns  else 0
 
     k1, k2, k3, k4, k5 = st.columns(5)
-    k1.metric("Prompts", f"{total_prompts:,}")
-    k2.metric("Input Tokens", f"{total_input:,}")
-    k3.metric("Output Tokens", f"{total_output:,}")
-    k4.metric("Cache Read Tokens", f"{total_cache_read:,}")
-    k5.metric("Edits Accepted", f"{total_edits:,}")
+    k1.metric("Prompts",         f"{total_prompts:,}")
+    k2.metric("Input Tokens",    f"{total_input:,}")
+    k3.metric("Output Tokens",   f"{total_output:,}")
+    k4.metric("Cache Read",      f"{total_cache_read:,}")
+    k5.metric("Edits Accepted",  f"{total_edits:,}")
+
+    st.divider()
+    cc_color = tool_color("claude_code", config)
+
+    # ── Prompts chart ──────────────────────────────────────────────────────────
+    st.subheader("Prompts")
+    fig = px.bar(prompts_df, x=col, y="prompts",
+                 labels={col: x_label, "prompts": "Prompts"},
+                 color_discrete_sequence=[cc_color])
+    fig.update_layout(height=260, margin=dict(t=10, b=10))
+    st.plotly_chart(fig, use_container_width=True)
 
     st.divider()
 
-    # Prompts per day
-    st.subheader("Prompts per Day")
-    if not prompts_df.empty:
-        fig = px.bar(
-            prompts_df, x="date", y="prompts",
-            labels={"date": "Date", "prompts": "Prompts"},
-            color_discrete_sequence=[tool_color("claude_code", config)],
-        )
-        fig.update_layout(height=280)
-        st.plotly_chart(fig, use_container_width=True)
-    else:
-        st.info("No prompt data in range. Prompts are captured via the UserPromptSubmit hook.")
+    # ── Tokens chart ───────────────────────────────────────────────────────────
+    st.subheader("Tokens")
+    fig = go.Figure()
+    for series, color, name in [
+        ("input_tokens",          "#4A9EFF", "Input"),
+        ("output_tokens",         "#F4B400", "Output"),
+        ("cache_read_tokens",     "#34A853", "Cache Read"),
+        ("cache_creation_tokens", "#EA4335", "Cache Creation"),
+    ]:
+        if series in tokens_df.columns:
+            fig.add_trace(go.Bar(name=name, x=tokens_df[col], y=tokens_df[series], marker_color=color))
+    fig.update_layout(barmode="stack", height=280, legend_title="Type",
+                      xaxis_title=x_label, yaxis_title="Tokens", margin=dict(t=10, b=10))
+    st.plotly_chart(fig, use_container_width=True)
+    if total_input == 0 and total_output == 0:
+        st.caption("Token counts appear after a session ends (Stop hook reads the session transcript).")
 
     st.divider()
 
-    # Tokens per day
-    st.subheader("Tokens per Day")
-    if not tokens_df.empty:
-        fig = go.Figure()
-        fig.add_trace(go.Bar(
-            name="Input", x=tokens_df["date"], y=tokens_df["input_tokens"],
-            marker_color="#4A9EFF",
-        ))
-        fig.add_trace(go.Bar(
-            name="Output", x=tokens_df["date"], y=tokens_df["output_tokens"],
-            marker_color="#F4B400",
-        ))
-        fig.add_trace(go.Bar(
-            name="Cache Read", x=tokens_df["date"], y=tokens_df["cache_read_tokens"],
-            marker_color="#34A853",
-        ))
-        fig.add_trace(go.Bar(
-            name="Cache Creation", x=tokens_df["date"], y=tokens_df["cache_creation_tokens"],
-            marker_color="#EA4335",
-        ))
-        fig.update_layout(barmode="stack", height=300, legend_title="Token Type",
-                          xaxis_title="Date", yaxis_title="Tokens")
-        st.plotly_chart(fig, use_container_width=True)
-        st.caption(
-            "Tokens are read from the session JSONL transcript at session end (Stop hook). "
-            "Sessions still in progress will appear in the next run."
-        )
-    else:
-        st.info(
-            "No token data yet. Token counts are captured when a Claude Code session ends "
-            "(Stop hook reads the session transcript). Make sure the hook is configured."
-        )
-
-    st.divider()
-
-    # Edits accepted per day
-    st.subheader("Edits Accepted per Day")
-    if not edits_df.empty:
-        fig = px.bar(
-            edits_df, x="date", y="edits_accepted",
-            labels={"date": "Date", "edits_accepted": "Edits Accepted"},
-            color_discrete_sequence=[tool_color("claude_code", config)],
-        )
-        fig.update_layout(height=280)
-        st.plotly_chart(fig, use_container_width=True)
-        st.caption("Counts Edit, Write, and NotebookEdit tool calls that completed successfully.")
-    else:
-        st.info("No edit data in range.")
+    # ── Edits chart ────────────────────────────────────────────────────────────
+    st.subheader("Edits Accepted")
+    fig = px.bar(edits_df, x=col, y="edits_accepted",
+                 labels={col: x_label, "edits_accepted": "Edits"},
+                 color_discrete_sequence=[cc_color])
+    fig.update_layout(height=260, margin=dict(t=10, b=10))
+    st.plotly_chart(fig, use_container_width=True)
 
 
 # ── Page 3: Tool Breakdown ────────────────────────────────────────────────────
@@ -674,6 +771,7 @@ def main() -> None:
             load_sessions.clear()
             load_raw_events.clear()
             load_claude_metrics.clear()
+            st.session_state.pop("metrics_offset", None)
             st.rerun()
         st.caption(f"Last refresh: {datetime.now().strftime('%H:%M:%S')}")
 

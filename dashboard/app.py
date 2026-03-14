@@ -281,7 +281,7 @@ def _get_period_range(period: str, offset: int):
         label = "This Year" if offset == 0 else str(year)
         return str(start), str(end), label, "month", offset == 0
 
-    return None, None, "", "day", True  # Custom — caller handles
+    return str(today), str(today), "", "day", True
 
 
 def _fill_gaps(df: pd.DataFrame, col: str, granularity: str, since: str, until: str) -> pd.DataFrame:
@@ -296,122 +296,157 @@ def _fill_gaps(df: pd.DataFrame, col: str, granularity: str, since: str, until: 
         )
         full = pd.DataFrame({col: [str(p) for p in periods]})
     else:
-        full = pd.DataFrame({col: [
-            str(d.date()) for d in pd.date_range(since, until, freq="D")
-        ]})
+        full = pd.DataFrame({col: [str(d.date()) for d in pd.date_range(since, until, freq="D")]})
 
     if df.empty:
-        return full.assign(**{c: 0 for c in
-            ["prompts", "edits_accepted", "input_tokens", "output_tokens",
-             "cache_read_tokens", "cache_creation_tokens"]
-            if c not in full.columns})
-    return full.merge(df.astype({col: type(full[col].iloc[0])}), on=col, how="left").fillna(0)
+        return full
+
+    # Coerce types so merge key matches
+    if granularity == "hour":
+        df = df.copy(); df[col] = df[col].astype(int)
+    else:
+        df = df.copy(); df[col] = df[col].astype(str)
+
+    merged = full.merge(df, on=col, how="left")
+    num_cols = merged.select_dtypes(include="number").columns.difference([col])
+    merged[num_cols] = merged[num_cols].fillna(0)
+    return merged
 
 
 def page_claude_metrics(config: dict) -> None:
     st.title("Claude Code Metrics")
 
-    # ── Period selector ────────────────────────────────────────────────────────
-    if "metrics_period" not in st.session_state:
-        st.session_state["metrics_period"] = "Week"
-    if "metrics_offset" not in st.session_state:
-        st.session_state["metrics_offset"] = 0
+    PERIODS = ["Today", "Week", "Month", "Year"]
 
-    def _reset_offset():
-        st.session_state["metrics_offset"] = 0
+    # ── State init ─────────────────────────────────────────────────────────────
+    if "m_period" not in st.session_state:
+        st.session_state["m_period"] = "Week"
+    if "m_offset" not in st.session_state:
+        st.session_state["m_offset"] = 0
+    if "m_date_range" not in st.session_state:
+        s, u, *_ = _get_period_range("Week", 0)
+        st.session_state["m_date_range"] = (_date.fromisoformat(s), _date.fromisoformat(u))
 
-    period = st.radio(
+    # If a pill or arrow just fired, sync the date range picker to match
+    if st.session_state.pop("m_nav_triggered", False):
+        s, u, *_ = _get_period_range(
+            st.session_state["m_period"], st.session_state["m_offset"]
+        )
+        st.session_state["m_date_range"] = (_date.fromisoformat(s), _date.fromisoformat(u))
+
+    # ── Segmented control (Apple-style pills) ──────────────────────────────────
+    def _on_period_change():
+        st.session_state["m_offset"] = 0
+        st.session_state["m_nav_triggered"] = True
+
+    period = st.pills(
         "",
-        ["Today", "Week", "Month", "Year", "Custom"],
-        index=["Today", "Week", "Month", "Year", "Custom"].index(
-            st.session_state.get("metrics_period", "Week")
-        ),
-        horizontal=True,
-        key="metrics_period",
-        on_change=_reset_offset,
+        PERIODS,
+        default="Week",
+        key="m_period",
+        on_change=_on_period_change,
+        label_visibility="collapsed",
+    ) or "Week"
+
+    # ── Date range picker (always visible, synced with period/arrows) ──────────
+    date_val = st.date_input(
+        "Date range",
+        key="m_date_range",
+        max_value=_date.today(),
     )
-
-    # ── Navigation arrows ──────────────────────────────────────────────────────
-    if period != "Custom":
-        since, until, label, granularity, at_latest = _get_period_range(
-            period, st.session_state["metrics_offset"]
-        )
-        col_prev, col_label, col_next = st.columns([1, 6, 1])
-        with col_prev:
-            if st.button("◀", use_container_width=True, key="nav_prev"):
-                st.session_state["metrics_offset"] -= 1
-                st.rerun()
-        with col_label:
-            st.markdown(
-                f"<p style='text-align:center;font-size:1.1rem;font-weight:600;"
-                f"margin:0;padding-top:6px'>{label}</p>",
-                unsafe_allow_html=True,
-            )
-        with col_next:
-            if st.button("▶", use_container_width=True, key="nav_next", disabled=at_latest):
-                st.session_state["metrics_offset"] += 1
-                st.rerun()
+    if isinstance(date_val, (list, tuple)) and len(date_val) == 2:
+        since, until = str(date_val[0]), str(date_val[1])
     else:
-        granularity = "day"
-        date_range = st.date_input(
-            "Date range",
-            value=(datetime.now().date() - timedelta(days=29), datetime.now().date()),
-            max_value=datetime.now().date(),
-        )
-        if isinstance(date_range, (list, tuple)) and len(date_range) == 2:
-            since, until = str(date_range[0]), str(date_range[1])
-        else:
-            d = date_range[0] if isinstance(date_range, (list, tuple)) else date_range
-            since = until = str(d)
+        d = date_val[0] if isinstance(date_val, (list, tuple)) else date_val
+        since = until = str(d)
 
-    # ── Load & fill data ───────────────────────────────────────────────────────
+    # Granularity always follows the selected period type
+    granularity = {"Today": "hour", "Week": "day", "Month": "day", "Year": "month"}.get(period, "day")
+
+    # ── Compute label / at_latest for nav arrows ───────────────────────────────
+    offset = st.session_state["m_offset"]
+    _, _, label, _, at_latest = _get_period_range(period, offset)
+
+    # ── Load & prepare data ────────────────────────────────────────────────────
     data = load_claude_metrics(since, until, granularity)
     col = data["col"]
     prompts_df = _fill_gaps(data["prompts"], col, granularity, since, until)
     tokens_df  = _fill_gaps(data["tokens"],  col, granularity, since, until)
     edits_df   = _fill_gaps(data["edits"],   col, granularity, since, until)
 
-    # Format x-axis labels
+    # Ensure required columns exist (empty ranges produce no data cols)
+    for df_, required in [
+        (prompts_df, ["prompts"]),
+        (edits_df,   ["edits_accepted"]),
+        (tokens_df,  ["input_tokens", "output_tokens", "cache_read_tokens", "cache_creation_tokens"]),
+    ]:
+        for c in required:
+            if c not in df_.columns:
+                df_[c] = 0
+
+    # Format x-axis
     if granularity == "hour":
         x_label = "Hour"
-        for df in [prompts_df, tokens_df, edits_df]:
-            df[col] = df[col].astype(int)
+        for df_ in [prompts_df, tokens_df, edits_df]:
+            df_[col] = df_[col].astype(int)
     elif granularity == "month":
         x_label = "Month"
-        for df in [prompts_df, tokens_df, edits_df]:
-            df[col] = pd.to_datetime(df[col] + "-01").dt.strftime("%b %Y")
+        for df_ in [prompts_df, tokens_df, edits_df]:
+            df_[col] = pd.to_datetime(df_[col] + "-01").dt.strftime("%b %Y")
     else:
         x_label = "Date"
 
     # ── KPIs ───────────────────────────────────────────────────────────────────
-    total_prompts    = int(prompts_df["prompts"].sum())         if "prompts"       in prompts_df.columns else 0
-    total_input      = int(tokens_df["input_tokens"].sum())     if "input_tokens"  in tokens_df.columns  else 0
-    total_output     = int(tokens_df["output_tokens"].sum())    if "output_tokens" in tokens_df.columns  else 0
-    total_cache_read = int(tokens_df["cache_read_tokens"].sum()) if "cache_read_tokens" in tokens_df.columns else 0
-    total_edits      = int(edits_df["edits_accepted"].sum())    if "edits_accepted" in edits_df.columns  else 0
+    total_prompts    = int(prompts_df["prompts"].sum())
+    total_input      = int(tokens_df["input_tokens"].sum())
+    total_output     = int(tokens_df["output_tokens"].sum())
+    total_cache_read = int(tokens_df["cache_read_tokens"].sum())
+    total_edits      = int(edits_df["edits_accepted"].sum())
 
     k1, k2, k3, k4, k5 = st.columns(5)
-    k1.metric("Prompts",         f"{total_prompts:,}")
-    k2.metric("Input Tokens",    f"{total_input:,}")
-    k3.metric("Output Tokens",   f"{total_output:,}")
-    k4.metric("Cache Read",      f"{total_cache_read:,}")
-    k5.metric("Edits Accepted",  f"{total_edits:,}")
+    k1.metric("Prompts",        f"{total_prompts:,}")
+    k2.metric("Input Tokens",   f"{total_input:,}")
+    k3.metric("Output Tokens",  f"{total_output:,}")
+    k4.metric("Cache Read",     f"{total_cache_read:,}")
+    k5.metric("Edits Accepted", f"{total_edits:,}")
 
     st.divider()
     cc_color = tool_color("claude_code", config)
 
-    # ── Prompts chart ──────────────────────────────────────────────────────────
+    # ── Per-chart navigation helper ────────────────────────────────────────────
+    def chart_nav(chart_key: str) -> None:
+        c1, c2, c3 = st.columns([1, 8, 1])
+        with c1:
+            if st.button("◀", key=f"prev_{chart_key}", use_container_width=True):
+                st.session_state["m_offset"] -= 1
+                st.session_state["m_nav_triggered"] = True
+                st.rerun()
+        with c2:
+            st.markdown(
+                f"<p style='text-align:center;font-weight:600;font-size:0.95rem;"
+                f"margin:0;padding-top:5px'>{label}</p>",
+                unsafe_allow_html=True,
+            )
+        with c3:
+            if st.button("▶", key=f"next_{chart_key}", use_container_width=True, disabled=at_latest):
+                st.session_state["m_offset"] += 1
+                st.session_state["m_nav_triggered"] = True
+                st.rerun()
+
+    # ── Prompts ────────────────────────────────────────────────────────────────
     st.subheader("Prompts")
+    chart_nav("prompts")
     fig = px.bar(prompts_df, x=col, y="prompts",
                  labels={col: x_label, "prompts": "Prompts"},
                  color_discrete_sequence=[cc_color])
-    fig.update_layout(height=260, margin=dict(t=10, b=10))
+    fig.update_layout(height=240, margin=dict(t=4, b=4))
     st.plotly_chart(fig, use_container_width=True)
 
     st.divider()
 
-    # ── Tokens chart ───────────────────────────────────────────────────────────
+    # ── Tokens ─────────────────────────────────────────────────────────────────
     st.subheader("Tokens")
+    chart_nav("tokens")
     fig = go.Figure()
     for series, color, name in [
         ("input_tokens",          "#4A9EFF", "Input"),
@@ -419,22 +454,22 @@ def page_claude_metrics(config: dict) -> None:
         ("cache_read_tokens",     "#34A853", "Cache Read"),
         ("cache_creation_tokens", "#EA4335", "Cache Creation"),
     ]:
-        if series in tokens_df.columns:
-            fig.add_trace(go.Bar(name=name, x=tokens_df[col], y=tokens_df[series], marker_color=color))
-    fig.update_layout(barmode="stack", height=280, legend_title="Type",
-                      xaxis_title=x_label, yaxis_title="Tokens", margin=dict(t=10, b=10))
+        fig.add_trace(go.Bar(name=name, x=tokens_df[col], y=tokens_df[series], marker_color=color))
+    fig.update_layout(barmode="stack", height=260, legend_title="Type",
+                      xaxis_title=x_label, yaxis_title="Tokens", margin=dict(t=4, b=4))
     st.plotly_chart(fig, use_container_width=True)
-    if total_input == 0 and total_output == 0:
-        st.caption("Token counts appear after a session ends (Stop hook reads the session transcript).")
+    if total_input == 0:
+        st.caption("Token counts appear after a session ends (Stop hook reads the transcript).")
 
     st.divider()
 
-    # ── Edits chart ────────────────────────────────────────────────────────────
+    # ── Edits Accepted ─────────────────────────────────────────────────────────
     st.subheader("Edits Accepted")
+    chart_nav("edits")
     fig = px.bar(edits_df, x=col, y="edits_accepted",
                  labels={col: x_label, "edits_accepted": "Edits"},
                  color_discrete_sequence=[cc_color])
-    fig.update_layout(height=260, margin=dict(t=10, b=10))
+    fig.update_layout(height=240, margin=dict(t=4, b=4))
     st.plotly_chart(fig, use_container_width=True)
 
 

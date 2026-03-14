@@ -494,29 +494,6 @@ def main() -> None:
             st.rerun()
         st.caption(f"Last refresh: {datetime.now().strftime('%H:%M:%S')}")
 
-        # Debug v5
-        st.caption("Code version: v5")
-        try:
-            from database.connection import _get_turso_creds
-            import urllib.request, json as _json
-            url, token = _get_turso_creds()
-            backend = "Turso" if url else "SQLite (fallback!)"
-            st.caption(f"Backend: {backend}")
-            if url and token:
-                http_url = url.replace("libsql://", "https://") + "/v2/pipeline"
-                body = _json.dumps({"requests": [
-                    {"type": "execute", "stmt": {"sql": "SELECT date, tool, active_minutes FROM daily_metrics ORDER BY date DESC LIMIT 5", "args": []}},
-                    {"type": "close"}
-                ]}).encode()
-                req = urllib.request.Request(http_url, data=body, headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"})
-                with urllib.request.urlopen(req) as resp:
-                    raw = resp.read()
-                st.caption(f"HTTP raw: {raw[:300]}")
-            else:
-                debug_df = query_df("SELECT date, tool, active_minutes FROM daily_metrics ORDER BY date DESC LIMIT 5")
-                st.dataframe(debug_df, hide_index=True)
-        except Exception as e:
-            st.caption(f"Debug error: {type(e).__name__}: {e}")
 
     if page == "Overview":
         page_overview(config)

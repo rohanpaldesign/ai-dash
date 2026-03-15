@@ -292,13 +292,13 @@ def page_overview(config: dict) -> None:
     share_daily = load_daily_metrics_range(s_since, s_until)
     with _sc1:
         if not share_daily.empty:
-            share = share_daily.groupby("tool")["estimated_tokens"].sum().reset_index()
-            share = share[share["estimated_tokens"] > 0]
+            share = share_daily.groupby("tool")["active_minutes"].sum().reset_index()
+            share = share[share["active_minutes"] > 0]
             share["tool_name"] = share["tool"].apply(lambda t: tool_name(t, config))
             if not share.empty:
                 fig = px.pie(
                     share,
-                    values="estimated_tokens",
+                    values="active_minutes",
                     names="tool_name",
                     color="tool",
                     color_discrete_map={t: tool_color(t, config) for t in TOOL_ORDER},
@@ -308,13 +308,13 @@ def page_overview(config: dict) -> None:
                     textinfo="label+percent",
                     texttemplate="%{label}<br>%{percent:.0%}",
                     textposition="inside",
-                    hovertemplate="%{label}: %{value:,} tokens (%{percent})<extra></extra>",
+                    hovertemplate="%{label}: %{value:.1f} min (%{percent})<extra></extra>",
                 )
                 fig.update_layout(height=300, showlegend=True, legend_title="Tool",
                                   margin=dict(t=4, b=4))
                 st.plotly_chart(fig, use_container_width=True)
             else:
-                st.info("No token data.")
+                st.info("No data.")
         else:
             st.info("No data.")
 

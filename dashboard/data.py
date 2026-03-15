@@ -43,9 +43,10 @@ def _process_sessions(df: pd.DataFrame) -> pd.DataFrame:
     if not df.empty:
         df["start_time"] = pd.to_datetime(df["start_time"], utc=True, errors="coerce")
         df["end_time"]   = pd.to_datetime(df["end_time"],   utc=True, errors="coerce")
-        df["date"]           = df["start_time"].dt.date
-        df["hour"]           = df["start_time"].dt.hour
-        df["weekday"]        = df["start_time"].dt.day_name()
+        _pst = df["start_time"].dt.tz_convert(_LA_TZ)
+        df["date"]           = _pst.dt.date
+        df["hour"]           = _pst.dt.hour
+        df["weekday"]        = _pst.dt.day_name()
         df["active_minutes"] = df["active_seconds"] / 60
         df["is_deep_work"]   = df["active_seconds"] >= 1500
     return df

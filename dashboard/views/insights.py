@@ -89,7 +89,7 @@ def page_insights(config: dict) -> None:
         if not sessions.empty:
             hour_totals = sessions.groupby("hour")["active_minutes"].sum()
             peak_hour   = int(hour_totals.idxmax())
-            st.metric("Peak Hour", f"{peak_hour:02d}:00 – {peak_hour+1:02d}:00 UTC")
+            st.metric("Peak Hour", f"{peak_hour:02d}:00 – {peak_hour+1:02d}:00 PT")
         else:
             st.metric("Peak Hour", "—")
 

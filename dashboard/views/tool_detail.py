@@ -19,7 +19,7 @@ from data import (
 )
 
 _LA_TZ = ZoneInfo("America/Los_Angeles")
-PERIODS = ["Today", "Week", "Month", "Year"]
+PERIODS = ["Today", "Week", "Month", "Year", "All Time"]
 BLOCK_LABELS = ["12AM–6AM", "6AM–12PM", "12PM–6PM", "6PM–12AM"]
 
 
@@ -93,6 +93,9 @@ def page_tool_detail(tool_id: str, config: dict) -> None:
 
     # ── Per-chart nav helper ───────────────────────────────────────────────────
     def chart_nav(chart_key, offset_key):
+        if period == "All Time":
+            all_since, all_until, *_ = _get_period_range("All Time", 0)
+            return all_since, all_until
         offset = st.session_state[offset_key]
         c_since, c_until, c_label, _, c_at_latest = _get_period_range(period, offset)
         c1, c2, c3 = st.columns([1, 8, 1])

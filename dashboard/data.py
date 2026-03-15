@@ -251,6 +251,10 @@ def _get_period_range(period: str, offset: int):
         label = "This Year" if offset == 0 else str(year)
         return str(start), str(end), label, "month", offset == 0
 
+    if period == "All Time":
+        start = _date(2020, 1, 1)
+        return str(start), str(today), "All Time", "month", True
+
     return str(today), str(today), "", "day", True
 
 

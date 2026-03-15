@@ -21,7 +21,7 @@ from data import (
 )
 
 _LA_TZ = ZoneInfo("America/Los_Angeles")
-PERIODS = ["Today", "Week", "Month", "Year"]
+PERIODS = ["Today", "Week", "Month", "Year", "All Time"]
 
 
 def page_overview(config: dict) -> None:
@@ -72,6 +72,9 @@ def page_overview(config: dict) -> None:
 
     # ── Per-chart nav helper ───────────────────────────────────────────────────
     def chart_nav(chart_key, offset_key):
+        if period == "All Time":
+            all_since, all_until, *_ = _get_period_range("All Time", 0)
+            return all_since, all_until
         offset = st.session_state[offset_key]
         c_since, c_until, c_label, _, c_at_latest = _get_period_range(period, offset)
         c1, c2, c3 = st.columns([1, 8, 1])
@@ -131,73 +134,95 @@ def page_overview(config: dict) -> None:
     full_dates = pd.date_range(d_since, d_until, freq="D").strftime("%Y-%m-%d").tolist()
 
     if not daily.empty:
-        pivot_min = daily.pivot_table(
-            index="date", columns="tool", values="active_minutes", aggfunc="sum"
-        ).fillna(0)
-        pivot_min = pivot_min.reindex(full_dates, fill_value=0).reset_index()
-        pivot_min = pivot_min.rename(columns={"index": "date"})
-        pivot_min.columns.name = None
-
         pivot_sess = daily.pivot_table(
             index="date", columns="tool", values="session_count", aggfunc="sum"
         ).fillna(0)
         pivot_sess = pivot_sess.reindex(full_dates, fill_value=0).reset_index()
         pivot_sess = pivot_sess.rename(columns={"index": "date"})
         pivot_sess.columns.name = None
+
+        pivot_tok = daily.pivot_table(
+            index="date", columns="tool", values="estimated_tokens", aggfunc="sum"
+        ).fillna(0).reindex(full_dates, fill_value=0).reset_index().rename(columns={"index": "date"})
+        pivot_tok.columns.name = None
+
+        pivot_prom = daily.pivot_table(
+            index="date", columns="tool", values="prompt_count", aggfunc="sum"
+        ).fillna(0).reindex(full_dates, fill_value=0).reset_index().rename(columns={"index": "date"})
+        pivot_prom.columns.name = None
     else:
-        pivot_min = pd.DataFrame({"date": full_dates})
         pivot_sess = pd.DataFrame({"date": full_dates})
+        pivot_tok = pd.DataFrame({"date": full_dates})
+        pivot_prom = pd.DataFrame({"date": full_dates})
         for t in TOOL_ORDER:
-            pivot_min[t] = 0.0
             pivot_sess[t] = 0.0
+            pivot_tok[t] = 0.0
+            pivot_prom[t] = 0.0
 
-    col_min, col_sess = st.columns([1, 1])
+    st.markdown("**Total Tokens**")
+    fig = go.Figure()
+    for tool in TOOL_ORDER:
+        if tool in pivot_tok.columns:
+            vals = pivot_tok[tool]
+            fig.add_trace(go.Bar(
+                name=tool_name(tool, config),
+                x=pivot_tok["date"],
+                y=vals,
+                marker_color=tool_color(tool, config),
+                text=vals.apply(lambda v: f"{v:,.0f}" if v > 0 else ""),
+                textposition="inside",
+                insidetextanchor="middle",
+                textfont=dict(size=10),
+                hovertemplate="%{y:,.0f} tokens<extra></extra>",
+            ))
+    fig.update_layout(
+        barmode="stack", xaxis_title="Date", yaxis_title="Estimated Tokens",
+        legend_title="Tool", height=320, margin=dict(t=4, b=4), showlegend=True,
+    )
+    st.plotly_chart(fig, use_container_width=True)
 
-    with col_min:
-        st.markdown("**Active Minutes**")
-        fig = go.Figure()
-        for tool in TOOL_ORDER:
-            if tool in pivot_min.columns:
-                vals = pivot_min[tool]
-                fig.add_trace(go.Bar(
-                    name=tool_name(tool, config),
-                    x=pivot_min["date"],
-                    y=vals,
-                    marker_color=tool_color(tool, config),
-                    text=vals.apply(lambda v: f"{v:.1f}" if v > 0 else ""),
-                    textposition="inside",
-                    insidetextanchor="middle",
-                    textfont=dict(size=10),
-                    hovertemplate="%{y:.1f} min<extra></extra>",
-                ))
-        fig.update_layout(
-            barmode="stack", xaxis_title="Date", yaxis_title="Active Minutes",
-            legend_title="Tool", height=320, margin=dict(t=4, b=4), showlegend=True,
-        )
-        st.plotly_chart(fig, use_container_width=True)
+    st.markdown("**Sessions**")
+    fig = go.Figure()
+    for tool in TOOL_ORDER:
+        if tool in pivot_sess.columns:
+            vals = pivot_sess[tool]
+            fig.add_trace(go.Bar(
+                name=tool_name(tool, config),
+                x=pivot_sess["date"],
+                y=vals,
+                marker_color=tool_color(tool, config),
+                text=vals.apply(lambda v: f"{int(v)}" if v > 0 else ""),
+                textposition="inside",
+                insidetextanchor="middle",
+                textfont=dict(size=10),
+                hovertemplate="%{y}<extra></extra>",
+            ))
+    fig.update_layout(
+        barmode="stack", xaxis_title="Date", yaxis_title="Sessions",
+        legend_title="Tool", height=320, margin=dict(t=4, b=4), showlegend=True,
+    )
+    st.plotly_chart(fig, use_container_width=True)
 
-    with col_sess:
-        st.markdown("**Sessions**")
-        fig = go.Figure()
-        for tool in TOOL_ORDER:
-            if tool in pivot_sess.columns:
-                vals = pivot_sess[tool]
-                fig.add_trace(go.Bar(
-                    name=tool_name(tool, config),
-                    x=pivot_sess["date"],
-                    y=vals,
-                    marker_color=tool_color(tool, config),
-                    text=vals.apply(lambda v: f"{int(v)}" if v > 0 else ""),
-                    textposition="inside",
-                    insidetextanchor="middle",
-                    textfont=dict(size=10),
-                    hovertemplate="%{y}<extra></extra>",
-                ))
-        fig.update_layout(
-            barmode="stack", xaxis_title="Date", yaxis_title="Sessions",
-            legend_title="Tool", height=320, margin=dict(t=4, b=4), showlegend=True,
-        )
-        st.plotly_chart(fig, use_container_width=True)
+    st.markdown("**Prompts (Claude Code)**")
+    fig = go.Figure()
+    if "claude_code" in pivot_prom.columns:
+        vals = pivot_prom["claude_code"]
+        fig.add_trace(go.Bar(
+            name=tool_name("claude_code", config),
+            x=pivot_prom["date"],
+            y=vals,
+            marker_color=tool_color("claude_code", config),
+            text=vals.apply(lambda v: f"{int(v)}" if v > 0 else ""),
+            textposition="inside",
+            insidetextanchor="middle",
+            textfont=dict(size=10),
+            hovertemplate="%{y}<extra></extra>",
+        ))
+    fig.update_layout(
+        barmode="stack", xaxis_title="Date", yaxis_title="Prompts",
+        legend_title="Tool", height=320, margin=dict(t=4, b=4), showlegend=True,
+    )
+    st.plotly_chart(fig, use_container_width=True)
 
     # ── Tool Comparison table ──────────────────────────────────────────────────
     st.divider()
@@ -281,8 +306,6 @@ def page_overview(config: dict) -> None:
     # ── Tool Usage Share ───────────────────────────────────────────────────────
     st.divider()
     st.subheader("Tool Usage Share")
-    _sc1, _sc2 = st.columns([2, 3])
-
     if custom_mode:
         chart_nav("share", "ov_offset_share")
         s_since, s_until = custom_since, custom_until
@@ -290,33 +313,32 @@ def page_overview(config: dict) -> None:
         s_since, s_until = chart_nav("share", "ov_offset_share")
 
     share_daily = load_daily_metrics_range(s_since, s_until)
-    with _sc1:
-        if not share_daily.empty:
-            share = share_daily.groupby("tool")["active_minutes"].sum().reset_index()
-            share = share[share["active_minutes"] > 0]
-            share["tool_name"] = share["tool"].apply(lambda t: tool_name(t, config))
-            if not share.empty:
-                fig = px.pie(
-                    share,
-                    values="active_minutes",
-                    names="tool_name",
-                    color="tool",
-                    color_discrete_map={t: tool_color(t, config) for t in TOOL_ORDER},
-                    hole=0.4,
-                )
-                fig.update_traces(
-                    textinfo="label+percent",
-                    texttemplate="%{label}<br>%{percent:.0%}",
-                    textposition="inside",
-                    hovertemplate="%{label}: %{value:.1f} min (%{percent})<extra></extra>",
-                )
-                fig.update_layout(height=300, showlegend=True, legend_title="Tool",
-                                  margin=dict(t=4, b=4))
-                st.plotly_chart(fig, use_container_width=True)
-            else:
-                st.info("No data.")
+    if not share_daily.empty:
+        share = share_daily.groupby("tool")["active_minutes"].sum().reset_index()
+        share = share[share["active_minutes"] > 0]
+        share["tool_name"] = share["tool"].apply(lambda t: tool_name(t, config))
+        if not share.empty:
+            fig = px.pie(
+                share,
+                values="active_minutes",
+                names="tool_name",
+                color="tool",
+                color_discrete_map={t: tool_color(t, config) for t in TOOL_ORDER},
+                hole=0.4,
+            )
+            fig.update_traces(
+                textinfo="label+percent",
+                texttemplate="%{label}<br>%{percent:.0%}",
+                textposition="inside",
+                hovertemplate="%{label}: %{value:.1f} min (%{percent})<extra></extra>",
+            )
+            fig.update_layout(height=300, showlegend=True, legend_title="Tool",
+                              margin=dict(t=4, b=4))
+            st.plotly_chart(fig, use_container_width=True)
         else:
             st.info("No data.")
+    else:
+        st.info("No data.")
 
     # ── Usage Heatmap ──────────────────────────────────────────────────────────
     st.divider()

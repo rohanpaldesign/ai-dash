@@ -33,11 +33,13 @@ window_patterns:
     - "Gemini"
     - "gemini.google.com"
 
-# AFK threshold in seconds (default: 5 minutes)
-afk_threshold_seconds: 300
+# AFK threshold in seconds (default: 10 minutes)
+afk_threshold_seconds: 600
 
 # Session gap threshold — new session if gap > this many seconds
-session_gap_seconds: 300
+session_gap_seconds: 600
 
 # Repo roots to scan for git activity (set locally per device — not used by dashboard)
-repo_roots: []
+repo_roots:
+  - "D:/"
+  - "C:/Users/rpsrb"

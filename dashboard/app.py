@@ -22,6 +22,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import streamlit as st
 
+from processors.metrics_calculator import run as _run_metrics
+
 from data import (
     load_claude_metrics,
     load_config,
@@ -62,6 +64,11 @@ def main() -> None:
 
     config = load_config()
 
+    # ── Compute metrics once per session on startup ────────────────────────────
+    if "metrics_computed" not in st.session_state:
+        _run_metrics()
+        st.session_state["metrics_computed"] = True
+
     # ── Page state init ────────────────────────────────────────────────────────
     if "current_page" not in st.session_state:
         st.session_state["current_page"] = "Overview"
@@ -88,6 +95,7 @@ def main() -> None:
         st.divider()
 
         if st.button("Refresh Data"):
+            _run_metrics()
             load_today_live.clear()
             load_daily_metrics.clear()
             load_daily_metrics_range.clear()

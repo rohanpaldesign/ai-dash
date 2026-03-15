@@ -75,8 +75,9 @@ def load_sessions(days: int = 30) -> pd.DataFrame:
 
 @st.cache_data(ttl=60)
 def load_sessions_range(since: str, until: str) -> pd.DataFrame:
+    tz = _tz_offset_sql()
     df = query_df(
-        "SELECT * FROM sessions WHERE DATE(start_time) BETWEEN ? AND ? ORDER BY start_time",
+        f"SELECT * FROM sessions WHERE DATE(datetime(start_time, '{tz}')) BETWEEN ? AND ? ORDER BY start_time",
         (since, until),
     )
     return _process_sessions(df)

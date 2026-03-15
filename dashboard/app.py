@@ -46,22 +46,11 @@ from views.tools_all import page_tools_all
 
 _LA_TZ = ZoneInfo("America/Los_Angeles")
 
-_NAV_ITEMS = [
-    "Overview",
-    "── Tools ──",
-    "All Tools",
-    "Claude Code",
-    "Cursor",
-    "ChatGPT",
-    "Gemini",
-    "──────────",
-    "Sessions",
-    "Insights",
-    "Settings",
-]
-
-# Pages that are section dividers (not navigable)
-_DIVIDERS = {"── Tools ──", "──────────"}
+def _nav_button(label: str, page_key: str) -> None:
+    """Render a nav button; clicking sets current_page and reruns."""
+    if st.button(label, key=f"nav_{page_key}", use_container_width=True):
+        st.session_state["current_page"] = page_key
+        st.rerun()
 
 
 def main() -> None:
@@ -73,6 +62,10 @@ def main() -> None:
     )
 
     config = load_config()
+
+    # ── Page state init ────────────────────────────────────────────────────────
+    if "current_page" not in st.session_state:
+        st.session_state["current_page"] = "Overview"
 
     # ── Global date range init ─────────────────────────────────────────────────
     today = datetime.now(_LA_TZ).date()
@@ -97,11 +90,19 @@ def main() -> None:
 
         st.divider()
 
-        page = st.radio(
-            "Navigate",
-            _NAV_ITEMS,
-            label_visibility="collapsed",
-        )
+        _nav_button("Overview", "Overview")
+
+        st.markdown("**Tools**")
+        _nav_button("All Tools",   "All Tools")
+        _nav_button("Claude Code", "Claude Code")
+        _nav_button("Cursor",      "Cursor")
+        _nav_button("ChatGPT",     "ChatGPT")
+        _nav_button("Gemini",      "Gemini")
+
+        st.divider()
+        _nav_button("Sessions", "Sessions")
+        _nav_button("Insights", "Insights")
+        _nav_button("Settings", "Settings")
 
         st.divider()
 
@@ -121,9 +122,9 @@ def main() -> None:
         st.caption(f"Last refresh: {datetime.now(_LA_TZ).strftime('%H:%M:%S')} PST")
 
     # ── Routing ────────────────────────────────────────────────────────────────
-    if page in _DIVIDERS:
-        st.info("Select a page from the sidebar.")
-    elif page == "Overview":
+    page = st.session_state["current_page"]
+
+    if page == "Overview":
         page_overview(config)
     elif page == "All Tools":
         page_tools_all(config)

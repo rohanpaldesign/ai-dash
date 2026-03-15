@@ -83,10 +83,10 @@ def process_window_sessions(db: sqlite3.Connection) -> int:
     return count
 
 
-def process_claude_sessions(db: sqlite3.Connection) -> int:
+def process_claude_sessions(db: sqlite3.Connection, gap_seconds: float = 600) -> int:
     """
     Group Claude Code hook events by session_id.
-    Compute: active_seconds from Stop events, prompt/tool/failure counts.
+    Compute: active_seconds as sum of inter-event gaps <= gap_seconds, prompt/tool/failure counts.
     """
     cur = db.execute(
         """
@@ -106,25 +106,46 @@ def process_claude_sessions(db: sqlite3.Connection) -> int:
         """
     )
     rows = cur.fetchall()
+
+    # Fetch all timestamps per session for gap-sum calculation
+    ts_cur = db.execute(
+        "SELECT session_id, timestamp FROM raw_events "
+        "WHERE tool = 'claude_code' AND session_id IS NOT NULL "
+        "ORDER BY session_id, timestamp"
+    )
+    from collections import defaultdict
+    session_timestamps = defaultdict(list)
+    for sid, ts in ts_cur.fetchall():
+        session_timestamps[sid].append(ts)
+
+    def compute_active_seconds(timestamps):
+        if len(timestamps) < 2:
+            return 0.0
+        total = 0.0
+        for i in range(1, len(timestamps)):
+            try:
+                t0 = datetime.fromisoformat(timestamps[i-1].replace("Z", "+00:00"))
+                t1 = datetime.fromisoformat(timestamps[i].replace("Z", "+00:00"))
+                gap = (t1 - t0).total_seconds()
+                if gap <= gap_seconds:
+                    total += gap
+            except Exception:
+                pass
+        return total
+
     count = 0
     for row in rows:
         (session_id, start_time, end_time, cwd, repo,
          prompt_count, tool_call_count, failure_count) = row
 
-        # Estimate active_seconds from start→end (since we don't have explicit duration from hooks)
-        try:
-            t0 = datetime.fromisoformat(start_time.replace("Z", "+00:00"))
-            t1 = datetime.fromisoformat(end_time.replace("Z", "+00:00"))
-            active_seconds = (t1 - t0).total_seconds()
-        except Exception:
-            active_seconds = 0
+        active_seconds = compute_active_seconds(session_timestamps.get(session_id, []))
 
         upsert_session(db, {
             "session_id": session_id,
             "tool": "claude_code",
             "start_time": start_time,
             "end_time": end_time,
-            "active_seconds": max(0, active_seconds),
+            "active_seconds": active_seconds,
             "repo": repo,
             "prompt_count": prompt_count or 0,
             "tool_call_count": tool_call_count or 0,
@@ -135,10 +156,12 @@ def process_claude_sessions(db: sqlite3.Connection) -> int:
 
 
 def run() -> None:
+    config = yaml.safe_load(CONFIG_PATH.read_text())
+    gap_seconds = config.get("session_gap_seconds", 600)
     db = get_connection()
     try:
         w = process_window_sessions(db)
-        c = process_claude_sessions(db)
+        c = process_claude_sessions(db, gap_seconds=gap_seconds)
         db.commit()
         logger.info("Sessionizer: %d window sessions, %d Claude sessions processed", w, c)
     finally:

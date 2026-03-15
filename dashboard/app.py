@@ -4,7 +4,6 @@ dashboard/app.py — AI Usage Dashboard entrypoint.
 Navigation:
   Overview
   ── Tools ──
-    All Tools
     Claude Code
     Cursor
     ChatGPT
@@ -15,7 +14,7 @@ Navigation:
 """
 
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -43,7 +42,6 @@ from views.overview import page_overview
 from views.sessions import page_sessions
 from views.settings import page_settings
 from views.tool_detail import page_tool_detail
-from views.tools_all import page_tools_all
 
 _LA_TZ = ZoneInfo("America/Los_Angeles")
 
@@ -68,33 +66,15 @@ def main() -> None:
     if "current_page" not in st.session_state:
         st.session_state["current_page"] = "Overview"
 
-    # ── Global date range init ─────────────────────────────────────────────────
-    today = datetime.now(_LA_TZ).date()
-    if "global_date_from" not in st.session_state:
-        st.session_state["global_date_from"] = today - timedelta(days=29)
-    if "global_date_to" not in st.session_state:
-        st.session_state["global_date_to"] = today
-
     # ── Sidebar ────────────────────────────────────────────────────────────────
     with st.sidebar:
         st.title("AI Usage Dashboard")
         st.caption("Cloud • Zero cost • Always on")
         st.divider()
 
-        # Global date range pickers
-        gf = st.date_input("From", value=st.session_state["global_date_from"],
-                           max_value=today, key="global_date_from")
-        gt = st.date_input("To",   value=st.session_state["global_date_to"],
-                           max_value=today, key="global_date_to")
-        if gf > gt:
-            st.session_state["global_date_to"] = gf
-
-        st.divider()
-
         _nav_button("Overview", "Overview")
 
         st.markdown("**Tools**")
-        _nav_button("All Tools",   "All Tools")
         _nav_button("Claude Code", "Claude Code")
         _nav_button("Cursor",      "Cursor")
         _nav_button("ChatGPT",     "ChatGPT")
@@ -128,8 +108,6 @@ def main() -> None:
 
     if page == "Overview":
         page_overview(config)
-    elif page == "All Tools":
-        page_tools_all(config)
     elif page == "Claude Code":
         page_claude_code(config)
     elif page == "Cursor":

@@ -31,12 +31,12 @@ def page_overview(config: dict) -> None:
 
     # ── State init ─────────────────────────────────────────────────────────────
     if "ov_period" not in st.session_state:
-        st.session_state["ov_period"] = "Month"
+        st.session_state["ov_period"] = "Week"
     for _k in ("ov_offset_daily", "ov_offset_share", "ov_offset_heatmap"):
         if _k not in st.session_state:
             st.session_state[_k] = 0
     if "ov_date_from" not in st.session_state:
-        s, u, *_ = _get_period_range("Month", 0)
+        s, u, *_ = _get_period_range("Week", 0)
         st.session_state["ov_date_from"] = _date.fromisoformat(s)
         st.session_state["ov_date_to"]   = _date.fromisoformat(u)
 
@@ -52,9 +52,9 @@ def page_overview(config: dict) -> None:
 
     # ── Period pills + date pickers ────────────────────────────────────────────
     period = st.pills(
-        "", PERIODS, default="Month", key="ov_period",
+        "", PERIODS, default="Week", key="ov_period",
         on_change=_on_ov_period_change, label_visibility="collapsed",
-    ) or "Month"
+    ) or "Week"
 
     base_since_str, base_until_str, _, granularity, _ = _get_period_range(period, 0)
     base_since = _date.fromisoformat(base_since_str)
@@ -118,12 +118,8 @@ def page_overview(config: dict) -> None:
 
     st.divider()
 
-    # ── Daily Activity chart ───────────────────────────────────────────────────
+    # ── Daily Activity charts (side by side) ──────────────────────────────────
     st.subheader("Daily Activity")
-    metric_pill = st.pills(
-        "", ["Active Minutes", "Sessions"], default="Active Minutes",
-        key="overview_metric_pill", label_visibility="collapsed",
-    ) or "Active Minutes"
 
     if custom_mode:
         chart_nav("daily", "ov_offset_daily")
@@ -132,33 +128,76 @@ def page_overview(config: dict) -> None:
         d_since, d_until = chart_nav("daily", "ov_offset_daily")
 
     daily = load_daily_metrics_range(d_since, d_until)
-    if not daily.empty:
-        val_col = "active_minutes" if metric_pill == "Active Minutes" else "session_count"
-        pivot = daily.pivot_table(
-            index="date", columns="tool", values=val_col, aggfunc="sum"
-        ).fillna(0).reset_index()
+    full_dates = pd.date_range(d_since, d_until, freq="D").strftime("%Y-%m-%d").tolist()
 
+    if not daily.empty:
+        pivot_min = daily.pivot_table(
+            index="date", columns="tool", values="active_minutes", aggfunc="sum"
+        ).fillna(0)
+        pivot_min = pivot_min.reindex(full_dates, fill_value=0).reset_index()
+        pivot_min = pivot_min.rename(columns={"index": "date"})
+        pivot_min.columns.name = None
+
+        pivot_sess = daily.pivot_table(
+            index="date", columns="tool", values="session_count", aggfunc="sum"
+        ).fillna(0)
+        pivot_sess = pivot_sess.reindex(full_dates, fill_value=0).reset_index()
+        pivot_sess = pivot_sess.rename(columns={"index": "date"})
+        pivot_sess.columns.name = None
+    else:
+        pivot_min = pd.DataFrame({"date": full_dates})
+        pivot_sess = pd.DataFrame({"date": full_dates})
+        for t in TOOL_ORDER:
+            pivot_min[t] = 0.0
+            pivot_sess[t] = 0.0
+
+    col_min, col_sess = st.columns([1, 1])
+
+    with col_min:
+        st.markdown("**Active Minutes**")
         fig = go.Figure()
         for tool in TOOL_ORDER:
-            if tool in pivot.columns:
+            if tool in pivot_min.columns:
+                vals = pivot_min[tool]
                 fig.add_trace(go.Bar(
                     name=tool_name(tool, config),
-                    x=pivot["date"],
-                    y=pivot[tool],
+                    x=pivot_min["date"],
+                    y=vals,
                     marker_color=tool_color(tool, config),
-                    hovertemplate="%{y:.1f}<extra></extra>",
+                    text=vals.apply(lambda v: f"{v:.1f}" if v > 0 else ""),
+                    textposition="inside",
+                    insidetextanchor="middle",
+                    textfont=dict(size=10),
+                    hovertemplate="%{y:.1f} min<extra></extra>",
                 ))
         fig.update_layout(
-            barmode="stack",
-            xaxis_title="Date",
-            yaxis_title=metric_pill,
-            legend_title="Tool",
-            height=320,
-            margin=dict(t=4, b=4),
+            barmode="stack", xaxis_title="Date", yaxis_title="Active Minutes",
+            legend_title="Tool", height=320, margin=dict(t=4, b=4), showlegend=True,
         )
         st.plotly_chart(fig, use_container_width=True)
-    else:
-        st.info("No activity data for this date range.")
+
+    with col_sess:
+        st.markdown("**Sessions**")
+        fig = go.Figure()
+        for tool in TOOL_ORDER:
+            if tool in pivot_sess.columns:
+                vals = pivot_sess[tool]
+                fig.add_trace(go.Bar(
+                    name=tool_name(tool, config),
+                    x=pivot_sess["date"],
+                    y=vals,
+                    marker_color=tool_color(tool, config),
+                    text=vals.apply(lambda v: f"{int(v)}" if v > 0 else ""),
+                    textposition="inside",
+                    insidetextanchor="middle",
+                    textfont=dict(size=10),
+                    hovertemplate="%{y}<extra></extra>",
+                ))
+        fig.update_layout(
+            barmode="stack", xaxis_title="Date", yaxis_title="Sessions",
+            legend_title="Tool", height=320, margin=dict(t=4, b=4), showlegend=True,
+        )
+        st.plotly_chart(fig, use_container_width=True)
 
     # ── Tool Usage Share + Heatmap (side by side) ──────────────────────────────
     col_donut, col_heat = st.columns([1, 2])
@@ -183,7 +222,12 @@ def page_overview(config: dict) -> None:
                 color_discrete_map={t: tool_color(t, config) for t in TOOL_ORDER},
                 hole=0.4,
             )
-            fig.update_traces(hovertemplate="%{label}: %{value:.1f} min (%{percent})<extra></extra>")
+            fig.update_traces(
+                textinfo="label+value",
+                texttemplate="%{label}<br>%{value:.1f} min",
+                textposition="inside",
+                hovertemplate="%{label}: %{value:.1f} min (%{percent})<extra></extra>",
+            )
             fig.update_layout(height=300, showlegend=True, legend_title="Tool",
                               margin=dict(t=4, b=4))
             st.plotly_chart(fig, use_container_width=True)
@@ -223,6 +267,7 @@ def page_overview(config: dict) -> None:
                     labels={"x": "Hour", "y": "Day", "color": "Active Min"},
                     color_continuous_scale="Blues",
                     aspect="auto",
+                    text_auto=".1f",
                 )
                 fig.update_traces(hovertemplate="Day: %{y}<br>Hour: %{x}<br>%{z:.1f} min<extra></extra>")
                 fig.update_xaxes(

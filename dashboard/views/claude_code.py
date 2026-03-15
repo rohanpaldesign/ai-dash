@@ -160,6 +160,7 @@ def page_claude_code(config: dict) -> None:
     fig = px.bar(prompts_df, x=p_col, y="prompts",
                  labels={p_col: x_label, "prompts": "Prompts"},
                  color_discrete_sequence=[cc_color])
+    fig.update_traces(hovertemplate="%{y:,}<extra></extra>")
     fig.update_layout(height=240, margin=dict(t=4, b=4))
     st.plotly_chart(fig, use_container_width=True)
 
@@ -186,7 +187,8 @@ def page_claude_code(config: dict) -> None:
         ("cache_read_tokens",     "#34A853", "Cache Read"),
         ("cache_creation_tokens", "#EA4335", "Cache Creation"),
     ]:
-        fig.add_trace(go.Bar(name=name, x=tokens_df[t_col], y=tokens_df[series], marker_color=color))
+        fig.add_trace(go.Bar(name=name, x=tokens_df[t_col], y=tokens_df[series], marker_color=color,
+                             hovertemplate="%{y:,}<extra></extra>"))
     fig.update_layout(barmode="stack", height=260, legend_title="Type",
                       xaxis_title=x_label, yaxis_title="Tokens", margin=dict(t=4, b=4))
     st.plotly_chart(fig, use_container_width=True)
@@ -211,6 +213,7 @@ def page_claude_code(config: dict) -> None:
     fig = px.bar(edits_df, x=e_col, y="edits_accepted",
                  labels={e_col: x_label, "edits_accepted": "Edits"},
                  color_discrete_sequence=[cc_color])
+    fig.update_traces(hovertemplate="%{y:,}<extra></extra>")
     fig.update_layout(height=240, margin=dict(t=4, b=4))
     st.plotly_chart(fig, use_container_width=True)
 
@@ -232,6 +235,7 @@ def page_claude_code(config: dict) -> None:
                 tc_counts, x="Tool Name", y="Count",
                 color_discrete_sequence=[cc_color],
             )
+            fig.update_traces(hovertemplate="%{x}: %{y:,}<extra></extra>")
             fig.update_layout(height=300, margin=dict(t=4, b=4))
             st.plotly_chart(fig, use_container_width=True)
         else:
@@ -261,6 +265,7 @@ def page_claude_code(config: dict) -> None:
             labels={"active_minutes": "Minutes", "repo": "Repository"},
             color_discrete_sequence=[cc_color],
         )
+        fig.update_traces(hovertemplate="%{x:.1f} min<extra></extra>")
         fig.update_layout(
             height=max(200, len(repo_time) * 30),
             yaxis={"categoryorder": "total ascending"},
@@ -295,11 +300,13 @@ def page_claude_code(config: dict) -> None:
             fig.add_trace(go.Bar(
                 x=session_daily["date"], y=session_daily["sessions"],
                 name="AI Sessions", marker_color="#4A9EFF", opacity=0.7,
+                hovertemplate="%{y}<extra></extra>",
             ))
             fig.add_trace(go.Scatter(
                 x=commit_daily["date"], y=commit_daily["commits"],
                 name="Commits", mode="lines+markers",
                 line=dict(color="#F4B400", width=2), yaxis="y2",
+                hovertemplate="%{y}<extra></extra>",
             ))
             fig.update_layout(
                 yaxis=dict(title="AI Sessions"),

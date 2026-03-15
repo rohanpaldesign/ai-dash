@@ -283,6 +283,43 @@ def _fill_gaps(df: pd.DataFrame, col: str, granularity: str, since: str, until: 
     return merged
 
 
+# ── Tool activity (for tool detail pages) ────────────────────────────────────
+
+@st.cache_data(ttl=60)
+def load_tool_activity(tool: str, since: str, until: str, granularity: str) -> dict:
+    """Load window-active minutes and session counts grouped by time bucket (PST)."""
+    tz = _tz_offset_sql()
+    dt_expr = f"datetime(timestamp, '{tz}')"
+    date_filter = f"DATE({dt_expr}) BETWEEN ? AND ?"
+
+    if granularity == "6h":
+        grp = f"CAST(strftime('%H', {dt_expr}) AS INTEGER) / 6"
+        col = "block"
+    elif granularity == "hour":
+        grp = f"CAST(strftime('%H', {dt_expr}) AS INTEGER)"
+        col = "hour"
+    elif granularity == "month":
+        grp = f"strftime('%Y-%m', {dt_expr})"
+        col = "month"
+    else:  # day
+        grp = f"DATE({dt_expr})"
+        col = "date"
+
+    active = query_df(
+        f"SELECT {grp} AS {col}, SUM(duration_seconds)/60.0 AS active_minutes "
+        "FROM raw_events WHERE tool=? AND event_type='window_active' "
+        f"AND {date_filter} GROUP BY {grp} ORDER BY {grp}",
+        (tool, since, until),
+    )
+    sessions_q = query_df(
+        f"SELECT {grp} AS {col}, COUNT(DISTINCT session_id) AS session_count "
+        "FROM raw_events WHERE tool=? AND event_type='window_active' "
+        f"AND {date_filter} GROUP BY {grp} ORDER BY {grp}",
+        (tool, since, until),
+    )
+    return {"active": active, "sessions": sessions_q, "col": col}
+
+
 # ── Tool hourly breakdown (for tool detail pages) ────────────────────────────
 
 @st.cache_data(ttl=60)

@@ -34,6 +34,7 @@ from data import (
     load_sessions,
     load_sessions_range,
     load_today_live,
+    load_tool_activity,
     load_tool_hourly,
 )
 from views.claude_code import page_claude_code
@@ -115,6 +116,7 @@ def main() -> None:
             load_raw_events.clear()
             load_raw_events_range.clear()
             load_claude_metrics.clear()
+            load_tool_activity.clear()
             load_tool_hourly.clear()
             load_db_stats.clear()
             st.rerun()

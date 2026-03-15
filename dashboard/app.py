@@ -344,14 +344,16 @@ def page_claude_metrics(config: dict) -> None:
     for _k in ("m_offset_prompts", "m_offset_tokens", "m_offset_edits"):
         if _k not in st.session_state:
             st.session_state[_k] = 0
-    if "m_date_range" not in st.session_state:
+    if "m_date_from" not in st.session_state:
         s, u, *_ = _get_period_range("Week", 0)
-        st.session_state["m_date_range"] = (_date.fromisoformat(s), _date.fromisoformat(u))
+        st.session_state["m_date_from"] = _date.fromisoformat(s)
+        st.session_state["m_date_to"]   = _date.fromisoformat(u)
 
-    # If a pill or arrow just fired, sync the date range picker to the BASE period
+    # If a pill or arrow just fired, sync the date pickers to the BASE period
     if st.session_state.pop("m_nav_triggered", False):
         s, u, *_ = _get_period_range(st.session_state["m_period"], 0)
-        st.session_state["m_date_range"] = (_date.fromisoformat(s), _date.fromisoformat(u))
+        st.session_state["m_date_from"] = _date.fromisoformat(s)
+        st.session_state["m_date_to"]   = _date.fromisoformat(u)
 
     # ── Segmented control (Apple-style pills) ──────────────────────────────────
     def _on_period_change():
@@ -375,17 +377,15 @@ def page_claude_metrics(config: dict) -> None:
     base_until = _date.fromisoformat(base_until_str)
 
     # ── Date range picker (always visible, synced with period/arrows) ──────────
-    date_val = st.date_input(
-        "Date range",
-        key="m_date_range",
-        max_value=datetime.now(_LA_TZ).date(),
-    )
-    if isinstance(date_val, (list, tuple)) and len(date_val) == 2:
-        picker_since = _date.fromisoformat(str(date_val[0]))
-        picker_until = _date.fromisoformat(str(date_val[1]))
-    else:
-        _d = date_val[0] if isinstance(date_val, (list, tuple)) else date_val
-        picker_since = picker_until = _date.fromisoformat(str(_d))
+    _today_pst = datetime.now(_LA_TZ).date()
+    _dc1, _dc2 = st.columns(2)
+    with _dc1:
+        picker_since = st.date_input("From", key="m_date_from", max_value=_today_pst)
+    with _dc2:
+        picker_until = st.date_input("To",   key="m_date_to",   max_value=_today_pst)
+    # Ensure from <= to
+    if picker_since > picker_until:
+        picker_until = picker_since
 
     # Custom mode: user manually changed the picker (differs from base period)
     _all_zero = all(
@@ -876,7 +876,7 @@ def main() -> None:
             load_raw_events.clear()
             load_claude_metrics.clear()
             st.rerun()
-        st.caption(f"Last refresh: {datetime.now().strftime('%H:%M:%S')}")
+        st.caption(f"Last refresh: {datetime.now(_LA_TZ).strftime('%H:%M:%S')} PST")
 
 
     if page == "Overview":

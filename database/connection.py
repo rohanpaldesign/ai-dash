@@ -89,7 +89,7 @@ def query_df(sql: str, params: tuple = ()) -> pd.DataFrame:
             elif isinstance(p, int):
                 args.append({"type": "integer", "value": str(p)})
             elif isinstance(p, float):
-                args.append({"type": "float", "value": str(p)})
+                args.append({"type": "float", "value": float(p)})
             else:
                 args.append({"type": "text", "value": str(p)})
         body = json.dumps({
@@ -133,7 +133,7 @@ def execute_many(sql: str, params_list: list) -> None:
         if isinstance(p, int):
             return {"type": "integer", "value": str(p)}
         if isinstance(p, float):
-            return {"type": "float", "value": str(p)}
+            return {"type": "float", "value": float(p)}
         return {"type": "text", "value": str(p)}
 
     url, token = _get_turso_creds()
@@ -176,7 +176,7 @@ def execute_write(sql: str, params: tuple = ()) -> None:
             elif isinstance(p, int):
                 args.append({"type": "integer", "value": str(p)})
             elif isinstance(p, float):
-                args.append({"type": "float", "value": str(p)})
+                args.append({"type": "float", "value": float(p)})
             else:
                 args.append({"type": "text", "value": str(p)})
         body = json.dumps({

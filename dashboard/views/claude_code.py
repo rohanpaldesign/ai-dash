@@ -19,6 +19,7 @@ from data import (
 def page_claude_code(config: dict) -> None:
     st.title("Claude Code")
 
+    user_id = st.session_state["user"]["user_id"]
     PERIODS      = ["Today", "Week", "Month", "Year", "All Time"]
     BLOCK_LABELS = ["12AM–6AM", "6AM–12PM", "12PM–6PM", "6PM–12AM"]
     cc_color     = tool_color("claude_code", config)
@@ -59,6 +60,10 @@ def page_claude_code(config: dict) -> None:
     from datetime import datetime
     _LA_TZ = ZoneInfo("America/Los_Angeles")
     _today_pst = datetime.now(_LA_TZ).date()
+
+    for _k in ("m_date_from", "m_date_to"):
+        if isinstance(st.session_state.get(_k), _date) and st.session_state[_k] > _today_pst:
+            st.session_state[_k] = _today_pst
 
     _dc1, _dc2 = st.columns(2)
     with _dc1:
@@ -118,7 +123,7 @@ def page_claude_code(config: dict) -> None:
     # ── KPIs ──────────────────────────────────────────────────────────────────
     kpi_since = custom_since if custom_mode else base_since_str
     kpi_until = custom_until if custom_mode else base_until_str
-    kpi_data  = load_claude_metrics(kpi_since, kpi_until, granularity)
+    kpi_data  = load_claude_metrics(kpi_since, kpi_until, granularity, user_id)
     kpi_col   = kpi_data["col"]
     kpi_prompts_df = _fill_gaps(kpi_data["prompts"], kpi_col, granularity, kpi_since, kpi_until)
     kpi_tokens_df  = _fill_gaps(kpi_data["tokens"],  kpi_col, granularity, kpi_since, kpi_until)
@@ -154,7 +159,7 @@ def page_claude_code(config: dict) -> None:
         p_since, p_until = custom_since, custom_until
     else:
         p_since, p_until, _, _ = chart_nav("prompts", "m_offset_prompts")
-    p_data    = load_claude_metrics(p_since, p_until, granularity)
+    p_data    = load_claude_metrics(p_since, p_until, granularity, user_id)
     p_col     = p_data["col"]
     prompts_df = _fill_gaps(p_data["prompts"], p_col, granularity, p_since, p_until)
     if "prompts" not in prompts_df.columns:
@@ -176,7 +181,7 @@ def page_claude_code(config: dict) -> None:
         t_since, t_until = custom_since, custom_until
     else:
         t_since, t_until, _, _ = chart_nav("tokens", "m_offset_tokens")
-    t_data   = load_claude_metrics(t_since, t_until, granularity)
+    t_data   = load_claude_metrics(t_since, t_until, granularity, user_id)
     t_col    = t_data["col"]
     tokens_df = _fill_gaps(t_data["tokens"], t_col, granularity, t_since, t_until)
     for _c in ["input_tokens", "output_tokens", "cache_read_tokens", "cache_creation_tokens"]:
@@ -207,7 +212,7 @@ def page_claude_code(config: dict) -> None:
         e_since, e_until = custom_since, custom_until
     else:
         e_since, e_until, _, _ = chart_nav("edits", "m_offset_edits")
-    e_data   = load_claude_metrics(e_since, e_until, granularity)
+    e_data   = load_claude_metrics(e_since, e_until, granularity, user_id)
     e_col    = e_data["col"]
     edits_df  = _fill_gaps(e_data["edits"], e_col, granularity, e_since, e_until)
     if "edits_accepted" not in edits_df.columns:
@@ -224,7 +229,7 @@ def page_claude_code(config: dict) -> None:
 
     # ── Tool Call Breakdown ────────────────────────────────────────────────────
     st.subheader("Tool Call Breakdown")
-    raw = load_raw_events(30)
+    raw = load_raw_events(30, user_id)
     if not raw.empty:
         cc_tools = raw[
             (raw["tool"] == "claude_code") &
@@ -250,7 +255,7 @@ def page_claude_code(config: dict) -> None:
 
     # ── Top Repos ──────────────────────────────────────────────────────────────
     st.subheader("Top Repos by AI Time")
-    sessions = load_sessions(30)
+    sessions = load_sessions(30, user_id)
     cc_sessions = sessions[sessions["tool"] == "claude_code"] if not sessions.empty else sessions
     repo_time = (
         cc_sessions[cc_sessions["repo"].notna()]

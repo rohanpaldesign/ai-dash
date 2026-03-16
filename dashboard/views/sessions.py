@@ -15,8 +15,10 @@ from data import (
 def page_sessions(config: dict) -> None:
     st.title("Sessions")
 
+    user_id = st.session_state["user"]["user_id"]
+
     # Load a 90-day window; user filters will narrow it down
-    sessions = load_sessions(90)
+    sessions = load_sessions(90, user_id)
 
     if sessions.empty:
         st.info("No sessions recorded yet.")

@@ -3,3 +3,7 @@ libsql>=0.1.11
 pandas>=2.1.0
 plotly>=5.18.0
 pyyaml>=6.0.1
+bcrypt>=4.0.0
+google-auth>=2.0.0
+google-auth-oauthlib>=1.0.0
+streamlit-cookies-controller>=0.3.0

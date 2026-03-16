@@ -23,8 +23,10 @@ def _arrow(delta: float) -> str:
 def page_insights(config: dict) -> None:
     st.title("Insights")
 
-    sessions = load_sessions(90)
-    daily    = load_daily_metrics(90)
+    user_id = st.session_state["user"]["user_id"]
+
+    sessions = load_sessions(90, user_id)
+    daily    = load_daily_metrics(90, user_id)
 
     if sessions.empty:
         st.info("Not enough data for insights yet.")

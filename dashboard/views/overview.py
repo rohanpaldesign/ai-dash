@@ -27,6 +27,7 @@ PERIODS = ["Today", "Week", "Month", "Year", "All Time"]
 def page_overview(config: dict) -> None:
     st.title("Overview")
 
+    user_id = st.session_state["user"]["user_id"]
     _today_pst = datetime.now(_LA_TZ).date()
 
     # ── State init ─────────────────────────────────────────────────────────────
@@ -62,9 +63,9 @@ def page_overview(config: dict) -> None:
 
     _dc1, _dc2 = st.columns(2)
     with _dc1:
-        picker_since = st.date_input("From", key="ov_date_from", max_value=_today_pst)
+        picker_since = st.date_input("From", key="ov_date_from")
     with _dc2:
-        picker_until = st.date_input("To", key="ov_date_to", max_value=_today_pst)
+        picker_until = st.date_input("To", key="ov_date_to")
 
     _all_zero = all(st.session_state[k] == 0 for k in ("ov_offset_daily", "ov_offset_share", "ov_offset_heatmap", "ov_offset_trend"))
     custom_mode = _all_zero and (picker_since != base_since or picker_until != base_until)
@@ -81,7 +82,6 @@ def page_overview(config: dict) -> None:
         with c1:
             if st.button("◀", key=f"ov_prev_{chart_key}", use_container_width=True):
                 st.session_state[offset_key] -= 1
-                st.session_state["ov_nav_triggered"] = True
                 st.rerun()
         with c2:
             st.markdown(
@@ -92,15 +92,14 @@ def page_overview(config: dict) -> None:
         with c3:
             if st.button("▶", key=f"ov_next_{chart_key}", use_container_width=True, disabled=c_at_latest):
                 st.session_state[offset_key] += 1
-                st.session_state["ov_nav_triggered"] = True
                 st.rerun()
         return c_since, c_until
 
-    # ── KPI range (base period, no offset) ────────────────────────────────────
+    # ── KPI range (base period, no offset, capped at today) ───────────────────
     kpi_since = custom_since if custom_mode else base_since_str
-    kpi_until = custom_until if custom_mode else base_until_str
+    kpi_until = custom_until if custom_mode else str(min(base_until, _today_pst))
 
-    sessions = load_sessions_range(kpi_since, kpi_until)
+    sessions = load_sessions_range(kpi_since, kpi_until, user_id)
 
     total_sessions = len(sessions)
     total_prompts  = int(sessions["prompt_count"].sum()) if not sessions.empty else 0
@@ -130,8 +129,20 @@ def page_overview(config: dict) -> None:
     else:
         d_since, d_until = chart_nav("daily", "ov_offset_daily")
 
-    daily = load_daily_metrics_range(d_since, d_until)
-    full_dates = pd.date_range(d_since, d_until, freq="D").strftime("%Y-%m-%d").tolist()
+    d_query_until = str(min(_date.fromisoformat(d_until), _today_pst))
+    daily = load_daily_metrics_range(d_since, d_query_until, user_id)
+
+    # For Year/All Time use monthly buckets so bars aren't microscopic
+    if granularity == "month":
+        full_dates = [str(p) for p in pd.period_range(d_since, d_until, freq="M")]
+        if not daily.empty:
+            daily = daily.copy()
+            daily["date"] = daily["date"].str[:7]  # "YYYY-MM-DD" → "YYYY-MM"
+            daily = daily.groupby(["date", "tool"], as_index=False)[
+                ["session_count", "estimated_tokens", "prompt_count", "active_minutes"]
+            ].sum()
+    else:
+        full_dates = pd.date_range(d_since, d_until, freq="D").strftime("%Y-%m-%d").tolist()
 
     if not daily.empty:
         pivot_sess = daily.pivot_table(
@@ -287,7 +298,14 @@ def page_overview(config: dict) -> None:
     else:
         t_since, t_until = chart_nav("trend", "ov_offset_trend")
 
-    trend_daily = load_daily_metrics_range(t_since, t_until)
+    t_query_until = str(min(_date.fromisoformat(t_until), _today_pst))
+    trend_daily = load_daily_metrics_range(t_since, t_query_until, user_id)
+    if granularity == "month" and not trend_daily.empty:
+        trend_daily = trend_daily.copy()
+        trend_daily["date"] = trend_daily["date"].str[:7]
+        trend_daily = trend_daily.groupby(["date", "tool"], as_index=False)[
+            ["active_minutes", "session_count"]
+        ].sum()
     val_col = "active_minutes" if metric_pill == "Active Minutes" else "session_count"
     fig = go.Figure()
     for tool in TOOL_ORDER:
@@ -312,7 +330,8 @@ def page_overview(config: dict) -> None:
     else:
         s_since, s_until = chart_nav("share", "ov_offset_share")
 
-    share_daily = load_daily_metrics_range(s_since, s_until)
+    s_query_until = str(min(_date.fromisoformat(s_until), _today_pst))
+    share_daily = load_daily_metrics_range(s_since, s_query_until, user_id)
     if not share_daily.empty:
         share = share_daily.groupby("tool")["active_minutes"].sum().reset_index()
         share = share[share["active_minutes"] > 0]
@@ -354,7 +373,8 @@ def page_overview(config: dict) -> None:
     else:
         h_since, h_until = chart_nav("heatmap", "ov_offset_heatmap")
 
-    heat_sessions = load_sessions_range(h_since, h_until)
+    h_query_until = str(min(_date.fromisoformat(h_until), _today_pst))
+    heat_sessions = load_sessions_range(h_since, h_query_until, user_id)
     if not heat_sessions.empty:
         df = heat_sessions.copy()
         if selected != "All":
@@ -362,9 +382,13 @@ def page_overview(config: dict) -> None:
 
         if not df.empty:
             df["weekday"] = pd.Categorical(df["weekday"], categories=WEEKDAY_ORDER, ordered=True)
-            pivot_h = df.groupby(["weekday", "hour"])["active_minutes"].sum().reset_index()
-            pivot_h = pivot_h.pivot(index="weekday", columns="hour", values="active_minutes").fillna(0)
-            pivot_h = pivot_h.reindex(WEEKDAY_ORDER)
+            # Cap per (date, weekday, hour) at 60 before summing across days —
+            # multiple tools can overlap within the same hour but real time is still ≤ 60 min
+            per_day = df.groupby(["date", "weekday", "hour"], observed=True)["active_minutes"].sum().reset_index()
+            per_day["active_minutes"] = per_day["active_minutes"].clip(upper=60)
+            pivot_h = per_day.groupby(["weekday", "hour"], observed=True)["active_minutes"].sum().reset_index()
+            pivot_h = pivot_h.pivot_table(index="weekday", columns="hour", values="active_minutes", aggfunc="sum", fill_value=0)
+            pivot_h = pivot_h.reindex(WEEKDAY_ORDER).fillna(0)
             for h in range(24):
                 if h not in pivot_h.columns:
                     pivot_h[h] = 0

@@ -41,6 +41,25 @@ CREATE TABLE IF NOT EXISTS sessions (
 CREATE INDEX IF NOT EXISTS idx_sessions_tool       ON sessions(tool);
 CREATE INDEX IF NOT EXISTS idx_sessions_start_time ON sessions(start_time);
 
+CREATE TABLE IF NOT EXISTS users (
+    user_id       TEXT PRIMARY KEY,       -- UUID v4
+    username      TEXT UNIQUE NOT NULL,
+    email         TEXT UNIQUE NOT NULL,
+    display_name  TEXT,
+    password_hash TEXT,                   -- NULL for Google-only accounts
+    google_sub    TEXT UNIQUE,            -- Google subject ID; NULL for password users
+    created_at    TEXT NOT NULL,
+    last_login    TEXT
+);
+
+CREATE TABLE IF NOT EXISTS auth_otp (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id     TEXT NOT NULL,
+    code        TEXT NOT NULL,            -- 6-digit numeric string
+    expires_at  TEXT NOT NULL,            -- ISO 8601, 15-min TTL
+    used        INTEGER DEFAULT 0
+);
+
 CREATE TABLE IF NOT EXISTS daily_metrics (
     date             TEXT NOT NULL,          -- YYYY-MM-DD
     tool             TEXT NOT NULL,

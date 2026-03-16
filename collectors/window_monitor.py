@@ -29,6 +29,21 @@ from database.connection import get_connection
 
 POLL_INTERVAL = 5  # seconds between window checks
 
+
+def _get_user_id() -> str | None:
+    import os
+    uid = os.environ.get("AI_DASH_USER_ID")
+    if uid:
+        return uid
+    try:
+        import winreg
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment") as key:
+            uid, _ = winreg.QueryValueEx(key, "AI_DASH_USER_ID")
+            return uid
+    except Exception:
+        pass
+    return None
+
 logger = logging.getLogger(__name__)
 
 
@@ -64,12 +79,13 @@ def write_event(
     duration_seconds: float,
     window_title: str,
     session_id: str,
+    user_id: str | None = None,
 ) -> None:
     db.execute(
         """
         INSERT INTO raw_events
-          (timestamp, tool, event_type, session_id, window_title, duration_seconds)
-        VALUES (?, ?, 'window_active', ?, ?, ?)
+          (timestamp, tool, event_type, session_id, window_title, duration_seconds, user_id)
+        VALUES (?, ?, 'window_active', ?, ?, ?, ?)
         """,
         (
             datetime.now(timezone.utc).isoformat(),
@@ -77,6 +93,7 @@ def write_event(
             session_id,
             window_title[:500],
             round(duration_seconds, 2),
+            user_id,
         ),
     )
     db.commit()
@@ -131,6 +148,7 @@ def run(stop_event=None) -> None:
     gap_seconds = config.get("session_gap_seconds", 300)
 
     tracker = SessionTracker(gap_seconds=gap_seconds)
+    user_id = _get_user_id()
 
     # State: accumulate contiguous active duration per tool
     current_tool: str | None = None
@@ -153,7 +171,7 @@ def run(stop_event=None) -> None:
             logger.debug(
                 "Flush %s: %.1fs (%s) [%s]", current_tool, duration, reason, current_title[:60]
             )
-            write_event(db, current_tool, duration, current_title, current_session_id)
+            write_event(db, current_tool, duration, current_title, current_session_id, user_id)
         current_tool = None
         current_title = ""
         current_session_id = None

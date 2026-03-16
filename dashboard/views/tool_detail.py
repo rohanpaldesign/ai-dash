@@ -27,6 +27,8 @@ def page_tool_detail(tool_id: str, config: dict) -> None:
     display = tool_name(tool_id, config)
     st.title(display)
 
+    user_id = st.session_state["user"]["user_id"]
+
     st.info(
         "Prompt and token counts are only available for Claude Code. "
         f"{display} is tracked via window activity monitoring."
@@ -65,6 +67,10 @@ def page_tool_detail(tool_id: str, config: dict) -> None:
     base_since_str, base_until_str, _, granularity, _ = _get_period_range(period, 0)
     base_since = _date.fromisoformat(base_since_str)
     base_until = _date.fromisoformat(base_until_str)
+
+    for _k in (f"{_pfx}date_from", f"{_pfx}date_to"):
+        if isinstance(st.session_state.get(_k), _date) and st.session_state[_k] > _today_pst:
+            st.session_state[_k] = _today_pst
 
     _dc1, _dc2 = st.columns(2)
     with _dc1:
@@ -121,7 +127,7 @@ def page_tool_detail(tool_id: str, config: dict) -> None:
     kpi_since = custom_since if custom_mode else base_since_str
     kpi_until = custom_until if custom_mode else base_until_str
 
-    sessions = load_sessions_range(kpi_since, kpi_until)
+    sessions = load_sessions_range(kpi_since, kpi_until, user_id)
     if not sessions.empty:
         sessions = sessions[sessions["tool"] == tool_id]
 
@@ -147,7 +153,7 @@ def page_tool_detail(tool_id: str, config: dict) -> None:
     else:
         a_since, a_until = chart_nav("active", f"{_pfx}offset_active")
 
-    act_data = load_tool_activity(tool_id, a_since, a_until, granularity)
+    act_data = load_tool_activity(tool_id, a_since, a_until, granularity, user_id)
     act_col = act_data["col"]
     act_df = _fill_gaps(act_data["active"], act_col, granularity, a_since, a_until)
     if "active_minutes" not in act_df.columns:
@@ -170,7 +176,7 @@ def page_tool_detail(tool_id: str, config: dict) -> None:
     else:
         ss_since, ss_until = chart_nav("sessions", f"{_pfx}offset_sessions")
 
-    sess_data = load_tool_activity(tool_id, ss_since, ss_until, granularity)
+    sess_data = load_tool_activity(tool_id, ss_since, ss_until, granularity, user_id)
     sess_col = sess_data["col"]
     sess_df = _fill_gaps(sess_data["sessions"], sess_col, granularity, ss_since, ss_until)
     if "session_count" not in sess_df.columns:
@@ -187,7 +193,7 @@ def page_tool_detail(tool_id: str, config: dict) -> None:
 
     # ── Usage by Hour of Day ──────────────────────────────────────────────────
     st.subheader("Usage by Hour of Day")
-    hourly = load_tool_hourly(tool_id, kpi_since, kpi_until)
+    hourly = load_tool_hourly(tool_id, kpi_since, kpi_until, user_id)
     if not hourly.empty:
         full_hours = pd.DataFrame({"hour": list(range(24))})
         hourly = full_hours.merge(hourly, on="hour", how="left").fillna(0)

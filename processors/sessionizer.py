@@ -31,20 +31,22 @@ def upsert_session(db: sqlite3.Connection, session: dict) -> None:
         """
         INSERT INTO sessions
           (session_id, tool, start_time, end_time, active_seconds, repo,
-           prompt_count, tool_call_count, failure_count)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+           prompt_count, tool_call_count, failure_count, user_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(session_id) DO UPDATE SET
           end_time        = excluded.end_time,
           active_seconds  = excluded.active_seconds,
           repo            = COALESCE(excluded.repo, sessions.repo),
           prompt_count    = excluded.prompt_count,
           tool_call_count = excluded.tool_call_count,
-          failure_count   = excluded.failure_count
+          failure_count   = excluded.failure_count,
+          user_id         = COALESCE(excluded.user_id, sessions.user_id)
         """,
         (
             session["session_id"], session["tool"], session["start_time"],
             session["end_time"], session["active_seconds"], session["repo"],
             session["prompt_count"], session["tool_call_count"], session["failure_count"],
+            session.get("user_id"),
         ),
     )
 
@@ -57,7 +59,8 @@ def process_window_sessions(db: sqlite3.Connection) -> int:
                MIN(timestamp) AS start_time,
                MAX(timestamp) AS end_time,
                SUM(duration_seconds) AS active_seconds,
-               MAX(repo) AS repo
+               MAX(repo) AS repo,
+               MAX(user_id) AS user_id
         FROM raw_events
         WHERE event_type = 'window_active'
           AND session_id IS NOT NULL
@@ -67,7 +70,7 @@ def process_window_sessions(db: sqlite3.Connection) -> int:
     rows = cur.fetchall()
     count = 0
     for row in rows:
-        session_id, tool, start_time, end_time, active_seconds, repo = row
+        session_id, tool, start_time, end_time, active_seconds, repo, user_id = row
         upsert_session(db, {
             "session_id": session_id,
             "tool": tool,
@@ -78,6 +81,7 @@ def process_window_sessions(db: sqlite3.Connection) -> int:
             "prompt_count": 0,
             "tool_call_count": 0,
             "failure_count": 0,
+            "user_id": user_id,
         })
         count += 1
     return count
@@ -97,7 +101,8 @@ def process_claude_sessions(db: sqlite3.Connection, gap_seconds: float = 600) ->
                MAX(repo) AS repo,
                SUM(CASE WHEN event_type = 'prompt' THEN 1 ELSE 0 END) AS prompt_count,
                SUM(CASE WHEN event_type = 'tool_call' AND success = 1 THEN 1 ELSE 0 END) AS tool_call_count,
-               SUM(CASE WHEN event_type IN ('tool_failure') OR (event_type='tool_call' AND success=0) THEN 1 ELSE 0 END) AS failure_count
+               SUM(CASE WHEN event_type IN ('tool_failure') OR (event_type='tool_call' AND success=0) THEN 1 ELSE 0 END) AS failure_count,
+               MAX(user_id) AS user_id
         FROM raw_events
         WHERE tool = 'claude_code'
           AND session_id IS NOT NULL
@@ -136,7 +141,7 @@ def process_claude_sessions(db: sqlite3.Connection, gap_seconds: float = 600) ->
     count = 0
     for row in rows:
         (session_id, start_time, end_time, cwd, repo,
-         prompt_count, tool_call_count, failure_count) = row
+         prompt_count, tool_call_count, failure_count, user_id) = row
 
         active_seconds = compute_active_seconds(session_timestamps.get(session_id, []))
 
@@ -150,6 +155,7 @@ def process_claude_sessions(db: sqlite3.Connection, gap_seconds: float = 600) ->
             "prompt_count": prompt_count or 0,
             "tool_call_count": tool_call_count or 0,
             "failure_count": failure_count or 0,
+            "user_id": user_id,
         })
         count += 1
     return count

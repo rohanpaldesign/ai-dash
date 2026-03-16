@@ -65,21 +65,21 @@ def load_config() -> dict:
 # ── Sessions ──────────────────────────────────────────────────────────────────
 
 @st.cache_data(ttl=60)
-def load_sessions(days: int = 30) -> pd.DataFrame:
+def load_sessions(days: int = 30, user_id: str = "") -> pd.DataFrame:
     since = (datetime.now() - timedelta(days=days)).isoformat()
     df = query_df(
-        "SELECT * FROM sessions WHERE start_time >= ? ORDER BY start_time",
-        (since,),
+        "SELECT * FROM sessions WHERE start_time >= ? AND user_id = ? ORDER BY start_time",
+        (since, user_id),
     )
     return _process_sessions(df)
 
 
 @st.cache_data(ttl=60)
-def load_sessions_range(since: str, until: str) -> pd.DataFrame:
+def load_sessions_range(since: str, until: str, user_id: str = "") -> pd.DataFrame:
     tz = _tz_offset_sql()
     df = query_df(
-        f"SELECT * FROM sessions WHERE DATE(datetime(start_time, '{tz}')) BETWEEN ? AND ? ORDER BY start_time",
-        (since, until),
+        f"SELECT * FROM sessions WHERE DATE(datetime(start_time, '{tz}')) BETWEEN ? AND ? AND user_id = ? ORDER BY start_time",
+        (since, until, user_id),
     )
     return _process_sessions(df)
 
@@ -87,30 +87,30 @@ def load_sessions_range(since: str, until: str) -> pd.DataFrame:
 # ── Daily metrics ─────────────────────────────────────────────────────────────
 
 @st.cache_data(ttl=60)
-def load_daily_metrics(days: int = 30) -> pd.DataFrame:
+def load_daily_metrics(days: int = 30, user_id: str = "") -> pd.DataFrame:
     since = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
     return query_df(
-        "SELECT * FROM daily_metrics WHERE date >= ? ORDER BY date, tool",
-        (since,),
+        "SELECT * FROM daily_metrics WHERE date >= ? AND user_id = ? ORDER BY date, tool",
+        (since, user_id),
     )
 
 
 @st.cache_data(ttl=60)
-def load_daily_metrics_range(since: str, until: str) -> pd.DataFrame:
+def load_daily_metrics_range(since: str, until: str, user_id: str = "") -> pd.DataFrame:
     return query_df(
-        "SELECT * FROM daily_metrics WHERE date BETWEEN ? AND ? ORDER BY date, tool",
-        (since, until),
+        "SELECT * FROM daily_metrics WHERE date BETWEEN ? AND ? AND user_id = ? ORDER BY date, tool",
+        (since, until, user_id),
     )
 
 
 # ── Raw events ────────────────────────────────────────────────────────────────
 
 @st.cache_data(ttl=60)
-def load_raw_events(days: int = 30) -> pd.DataFrame:
+def load_raw_events(days: int = 30, user_id: str = "") -> pd.DataFrame:
     since = (datetime.now() - timedelta(days=days)).isoformat()
     df = query_df(
-        "SELECT * FROM raw_events WHERE timestamp >= ? ORDER BY timestamp",
-        (since,),
+        "SELECT * FROM raw_events WHERE timestamp >= ? AND user_id = ? ORDER BY timestamp",
+        (since, user_id),
     )
     if not df.empty:
         df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True, errors="coerce")
@@ -118,10 +118,10 @@ def load_raw_events(days: int = 30) -> pd.DataFrame:
 
 
 @st.cache_data(ttl=60)
-def load_raw_events_range(since: str, until: str) -> pd.DataFrame:
+def load_raw_events_range(since: str, until: str, user_id: str = "") -> pd.DataFrame:
     df = query_df(
-        "SELECT * FROM raw_events WHERE DATE(timestamp) BETWEEN ? AND ? ORDER BY timestamp",
-        (since, until),
+        "SELECT * FROM raw_events WHERE DATE(timestamp) BETWEEN ? AND ? AND user_id = ? ORDER BY timestamp",
+        (since, until, user_id),
     )
     if not df.empty:
         df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True, errors="coerce")
@@ -131,30 +131,30 @@ def load_raw_events_range(since: str, until: str) -> pd.DataFrame:
 # ── Today live (for Refresh cache clearing) ───────────────────────────────────
 
 @st.cache_data(ttl=60)
-def load_today_live() -> pd.DataFrame:
+def load_today_live(user_id: str = "") -> pd.DataFrame:
     """Query today's KPIs directly from raw_events and sessions (no aggregation delay)."""
     today_str = datetime.now().strftime("%Y-%m-%d")
 
     window_min = query_df(
         "SELECT tool, SUM(duration_seconds)/60.0 AS active_minutes "
         "FROM raw_events WHERE event_type='window_active' AND DATE(timestamp)=? "
-        "AND tool != 'claude_code' GROUP BY tool",
-        (today_str,),
+        "AND tool != 'claude_code' AND user_id = ? GROUP BY tool",
+        (today_str, user_id),
     )
     cc_min = query_df(
         "SELECT 'claude_code' AS tool, "
         "COALESCE(SUM((julianday(end_time)-julianday(start_time))*86400)/60.0, 0) AS active_minutes "
-        "FROM sessions WHERE tool='claude_code' AND DATE(start_time)=?",
-        (today_str,),
+        "FROM sessions WHERE tool='claude_code' AND DATE(start_time)=? AND user_id = ?",
+        (today_str, user_id),
     )
     sess_counts = query_df(
-        "SELECT tool, COUNT(*) AS session_count FROM sessions WHERE DATE(start_time)=? GROUP BY tool",
-        (today_str,),
+        "SELECT tool, COUNT(*) AS session_count FROM sessions WHERE DATE(start_time)=? AND user_id = ? GROUP BY tool",
+        (today_str, user_id),
     )
     prompt_stats = query_df(
         "SELECT tool, COUNT(*) AS prompt_count, COALESCE(SUM(estimated_tokens), 0) AS estimated_tokens "
-        "FROM raw_events WHERE event_type='prompt' AND DATE(timestamp)=? GROUP BY tool",
-        (today_str,),
+        "FROM raw_events WHERE event_type='prompt' AND DATE(timestamp)=? AND user_id = ? GROUP BY tool",
+        (today_str, user_id),
     )
 
     active_min = pd.concat([window_min, cc_min], ignore_index=True)
@@ -172,7 +172,7 @@ def load_today_live() -> pd.DataFrame:
 # ── Claude Code metrics ───────────────────────────────────────────────────────
 
 @st.cache_data(ttl=60)
-def load_claude_metrics(since: str, until: str, granularity: str) -> dict:
+def load_claude_metrics(since: str, until: str, granularity: str, user_id: str = "") -> dict:
     """Load prompts, tokens, and edits grouped by block / hour / day / month (PST)."""
     tz = _tz_offset_sql()
     dt_expr = f"datetime(timestamp, '{tz}')"
@@ -194,23 +194,23 @@ def load_claude_metrics(since: str, until: str, granularity: str) -> dict:
     prompts = query_df(
         f"SELECT {grp} AS {col}, COUNT(*) AS prompts "
         "FROM raw_events WHERE event_type='prompt' AND tool='claude_code' "
-        f"AND {date_filter} GROUP BY {grp} ORDER BY {grp}",
-        (since, until),
+        f"AND {date_filter} AND user_id = ? GROUP BY {grp} ORDER BY {grp}",
+        (since, until, user_id),
     )
     tokens = query_df(
         f"SELECT {grp} AS {col}, "
         "SUM(input_tokens) AS input_tokens, SUM(output_tokens) AS output_tokens, "
         "SUM(cache_read_tokens) AS cache_read_tokens, SUM(cache_creation_tokens) AS cache_creation_tokens "
         "FROM raw_events WHERE event_type='stop' AND tool='claude_code' "
-        f"AND input_tokens IS NOT NULL AND {date_filter} GROUP BY {grp} ORDER BY {grp}",
-        (since, until),
+        f"AND input_tokens IS NOT NULL AND {date_filter} AND user_id = ? GROUP BY {grp} ORDER BY {grp}",
+        (since, until, user_id),
     )
     edits = query_df(
         f"SELECT {grp} AS {col}, COUNT(*) AS edits_accepted "
         "FROM raw_events WHERE event_type='tool_call' AND tool='claude_code' "
         f"AND tool_name IN ('Edit','Write','NotebookEdit') AND success=1 "
-        f"AND {date_filter} GROUP BY {grp} ORDER BY {grp}",
-        (since, until),
+        f"AND {date_filter} AND user_id = ? GROUP BY {grp} ORDER BY {grp}",
+        (since, until, user_id),
     )
     return {"prompts": prompts, "tokens": tokens, "edits": edits, "col": col}
 
@@ -229,7 +229,7 @@ def _get_period_range(period: str, offset: int):
     if period == "Week":
         start_of_week = today - timedelta(days=today.weekday())
         start = start_of_week + timedelta(weeks=offset)
-        end = min(start + timedelta(days=6), today)
+        end = start + timedelta(days=6)
         label = "This Week" if offset == 0 else f"{start.strftime('%b %d')} – {end.strftime('%b %d, %Y')}"
         return str(start), str(end), label, "day", offset == 0
 
@@ -240,14 +240,14 @@ def _get_period_range(period: str, offset: int):
         while month > 12:
             month -= 12; year += 1
         start = _date(year, month, 1)
-        end = min(_date(year, month, _calendar.monthrange(year, month)[1]), today)
+        end = _date(year, month, _calendar.monthrange(year, month)[1])
         label = "This Month" if offset == 0 else start.strftime("%B %Y")
         return str(start), str(end), label, "day", offset == 0
 
     if period == "Year":
         year = today.year + offset
         start = _date(year, 1, 1)
-        end = min(_date(year, 12, 31), today)
+        end = _date(year, 12, 31)
         label = "This Year" if offset == 0 else str(year)
         return str(start), str(end), label, "month", offset == 0
 
@@ -291,7 +291,7 @@ def _fill_gaps(df: pd.DataFrame, col: str, granularity: str, since: str, until: 
 # ── Tool activity (for tool detail pages) ────────────────────────────────────
 
 @st.cache_data(ttl=60)
-def load_tool_activity(tool: str, since: str, until: str, granularity: str) -> dict:
+def load_tool_activity(tool: str, since: str, until: str, granularity: str, user_id: str = "") -> dict:
     """Load window-active minutes and session counts grouped by time bucket (PST)."""
     tz = _tz_offset_sql()
     dt_expr = f"datetime(timestamp, '{tz}')"
@@ -313,14 +313,14 @@ def load_tool_activity(tool: str, since: str, until: str, granularity: str) -> d
     active = query_df(
         f"SELECT {grp} AS {col}, SUM(duration_seconds)/60.0 AS active_minutes "
         "FROM raw_events WHERE tool=? AND event_type='window_active' "
-        f"AND {date_filter} GROUP BY {grp} ORDER BY {grp}",
-        (tool, since, until),
+        f"AND {date_filter} AND user_id = ? GROUP BY {grp} ORDER BY {grp}",
+        (tool, since, until, user_id),
     )
     sessions_q = query_df(
         f"SELECT {grp} AS {col}, COUNT(DISTINCT session_id) AS session_count "
         "FROM raw_events WHERE tool=? AND event_type='window_active' "
-        f"AND {date_filter} GROUP BY {grp} ORDER BY {grp}",
-        (tool, since, until),
+        f"AND {date_filter} AND user_id = ? GROUP BY {grp} ORDER BY {grp}",
+        (tool, since, until, user_id),
     )
     return {"active": active, "sessions": sessions_q, "col": col}
 
@@ -328,16 +328,16 @@ def load_tool_activity(tool: str, since: str, until: str, granularity: str) -> d
 # ── Tool hourly breakdown (for tool detail pages) ────────────────────────────
 
 @st.cache_data(ttl=60)
-def load_tool_hourly(tool: str, since: str, until: str) -> pd.DataFrame:
+def load_tool_hourly(tool: str, since: str, until: str, user_id: str = "") -> pd.DataFrame:
     tz = _tz_offset_sql()
     dt_expr = f"datetime(timestamp, '{tz}')"
     return query_df(
         f"SELECT CAST(strftime('%H', {dt_expr}) AS INTEGER) AS hour, "
         "SUM(duration_seconds)/60.0 AS active_minutes "
         "FROM raw_events WHERE tool=? AND event_type='window_active' "
-        f"AND DATE({dt_expr}) BETWEEN ? AND ? "
+        f"AND DATE({dt_expr}) BETWEEN ? AND ? AND user_id = ? "
         "GROUP BY hour ORDER BY hour",
-        (tool, since, until),
+        (tool, since, until, user_id),
     )
 
 

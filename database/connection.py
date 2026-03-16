@@ -118,3 +118,84 @@ def query_df(sql: str, params: tuple = ()) -> pd.DataFrame:
         cols = [d[0] for d in cur.description]
         rows = cur.fetchall()
     return pd.DataFrame(rows, columns=cols)
+
+
+def execute_many(sql: str, params_list: list) -> None:
+    """Execute the same SQL with multiple parameter sets in a single batch request."""
+    if not params_list:
+        return
+
+    def _enc(p):
+        if p is None:
+            return {"type": "null"}
+        if isinstance(p, bool):
+            return {"type": "integer", "value": "1" if p else "0"}
+        if isinstance(p, int):
+            return {"type": "integer", "value": str(p)}
+        if isinstance(p, float):
+            return {"type": "float", "value": str(p)}
+        return {"type": "text", "value": str(p)}
+
+    url, token = _get_turso_creds()
+    if url and token:
+        http_url = url.replace("libsql://", "https://") + "/v2/pipeline"
+        requests = [
+            {"type": "execute", "stmt": {"sql": sql, "args": [_enc(p) for p in params]}}
+            for params in params_list
+        ]
+        requests.append({"type": "close"})
+        body = json.dumps({"requests": requests}).encode()
+        req = urllib.request.Request(
+            http_url,
+            data=body,
+            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(req) as resp:
+            resp.read()
+        return
+
+    conn = sqlite3.connect(_LOCAL_DB)
+    with conn:
+        conn.executemany(sql, params_list)
+        conn.commit()
+
+
+def execute_write(sql: str, params: tuple = ()) -> None:
+    """Execute INSERT/UPDATE/DELETE.
+
+    Uses Turso HTTP API when credentials are available.
+    Falls back to local sqlite3 otherwise.
+    """
+    url, token = _get_turso_creds()
+    if url and token:
+        http_url = url.replace("libsql://", "https://") + "/v2/pipeline"
+        args = []
+        for p in params:
+            if p is None:
+                args.append({"type": "null"})
+            elif isinstance(p, int):
+                args.append({"type": "integer", "value": str(p)})
+            elif isinstance(p, float):
+                args.append({"type": "float", "value": str(p)})
+            else:
+                args.append({"type": "text", "value": str(p)})
+        body = json.dumps({
+            "requests": [
+                {"type": "execute", "stmt": {"sql": sql, "args": args}},
+                {"type": "close"},
+            ]
+        }).encode()
+        req = urllib.request.Request(
+            http_url,
+            data=body,
+            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(req) as resp:
+            resp.read()  # consume response; raise on HTTP error
+        return
+
+    # SQLite fallback
+    conn = sqlite3.connect(_LOCAL_DB)
+    with conn:
+        conn.execute(sql, params)
+        conn.commit()

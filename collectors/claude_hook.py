@@ -29,6 +29,20 @@ def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _get_user_id() -> str | None:
+    uid = os.environ.get("AI_DASH_USER_ID")
+    if uid:
+        return uid
+    try:
+        import winreg
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment") as key:
+            uid, _ = winreg.QueryValueEx(key, "AI_DASH_USER_ID")
+            return uid
+    except Exception:
+        pass
+    return None
+
+
 def extract_repo(cwd: str | None) -> str | None:
     """Walk up from cwd to find a .git directory and return repo name."""
     if not cwd:
@@ -73,6 +87,7 @@ def parse_transcript_tokens(transcript_path: str) -> dict:
 
 
 def handle_event(data: dict) -> None:
+    user_id = _get_user_id()
     hook_event = data.get("hook_event_name", "")
     session_id = data.get("session_id")
     cwd = data.get("cwd") or os.getcwd()
@@ -133,8 +148,8 @@ def handle_event(data: dict) -> None:
               (timestamp, tool, event_type, session_id, repo, cwd,
                prompt_chars, estimated_tokens, tool_name, success,
                input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
-               metadata_json)
-            VALUES (?, 'claude_code', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               metadata_json, user_id)
+            VALUES (?, 'claude_code', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 now_iso(),
@@ -151,6 +166,7 @@ def handle_event(data: dict) -> None:
                 cache_read_tokens,
                 cache_creation_tokens,
                 json.dumps(metadata) if metadata else None,
+                user_id,
             ),
         )
 

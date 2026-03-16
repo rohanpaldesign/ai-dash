@@ -143,10 +143,13 @@ def compute_commit_metrics() -> None:
 
 
 def run() -> None:
+    logger.info("Metrics: starting run")
     execute_write("DELETE FROM daily_metrics")
+    logger.info("Metrics: daily_metrics cleared")
     compute_session_metrics()
+    logger.info("Metrics: session metrics done")
     compute_commit_metrics()
-    logger.info("Metrics calculator: daily_metrics updated.")
+    logger.info("Metrics: daily_metrics updated.")
 
 
 if __name__ == "__main__":

@@ -104,7 +104,8 @@ def main() -> None:
         try:
             _run_metrics()
         except Exception as _metrics_err:
-            st.warning(f"Metrics computation failed: {_metrics_err}")
+            import traceback as _tb
+            st.warning(f"Metrics computation failed: {_metrics_err}\n\n```\n{_tb.format_exc()}\n```")
         st.session_state["metrics_computed"] = True
 
     # ── Page state init ────────────────────────────────────────────────────────

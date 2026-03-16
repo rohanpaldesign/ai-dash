@@ -8,6 +8,7 @@ otherwise falls back to local SQLite.
 import json
 import os
 import sqlite3
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -150,8 +151,12 @@ def execute_many(sql: str, params_list: list) -> None:
             data=body,
             headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
         )
-        with urllib.request.urlopen(req) as resp:
-            resp.read()
+        try:
+            with urllib.request.urlopen(req) as resp:
+                resp.read()
+        except urllib.error.HTTPError as _e:
+            _body = _e.read().decode(errors="replace")
+            raise RuntimeError(f"Turso execute_many HTTP {_e.code}: {_body}") from _e
         return
 
     conn = sqlite3.connect(_LOCAL_DB)

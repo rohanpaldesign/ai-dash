@@ -137,7 +137,7 @@ def execute_many(sql: str, params_list: list) -> None:
             i = int(f)
             if f == i and abs(f) < 2**53:
                 return {"type": "integer", "value": str(i)}
-            return {"type": "text", "value": repr(f)}
+            return {"type": "float", "value": f}  # native Python float → JSON number
         except (TypeError, ValueError):
             pass
         return {"type": "text", "value": str(p)}

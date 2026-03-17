@@ -132,10 +132,14 @@ def execute_many(sql: str, params_list: list) -> None:
             return {"type": "null"}
         if isinstance(p, bool):
             return {"type": "integer", "value": "1" if p else "0"}
-        if isinstance(p, numbers.Integral):
-            return {"type": "integer", "value": str(int(p))}
-        if isinstance(p, numbers.Real):
-            return {"type": "float", "value": float(p)}
+        try:
+            f = float(p)
+            i = int(f)
+            if f == i and abs(f) < 2**53:
+                return {"type": "integer", "value": str(i)}
+            return {"type": "text", "value": repr(f)}
+        except (TypeError, ValueError):
+            pass
         return {"type": "text", "value": str(p)}
 
     url, token = _get_turso_creds()

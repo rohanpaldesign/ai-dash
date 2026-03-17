@@ -6,6 +6,7 @@ otherwise falls back to local SQLite.
 """
 
 import json
+import numbers
 import os
 import sqlite3
 import urllib.error
@@ -131,9 +132,9 @@ def execute_many(sql: str, params_list: list) -> None:
             return {"type": "null"}
         if isinstance(p, bool):
             return {"type": "integer", "value": "1" if p else "0"}
-        if isinstance(p, int):
-            return {"type": "integer", "value": str(p)}
-        if isinstance(p, float):
+        if isinstance(p, numbers.Integral):
+            return {"type": "integer", "value": str(int(p))}
+        if isinstance(p, numbers.Real):
             return {"type": "float", "value": float(p)}
         return {"type": "text", "value": str(p)}
 

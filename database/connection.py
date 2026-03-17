@@ -155,8 +155,11 @@ def execute_many(sql: str, params_list: list) -> None:
             with urllib.request.urlopen(req) as resp:
                 resp.read()
         except urllib.error.HTTPError as _e:
-            _body = _e.read().decode(errors="replace")
-            raise RuntimeError(f"Turso execute_many HTTP {_e.code}: {_body}") from _e
+            try:
+                _body = _e.read().decode(errors="replace")
+            except Exception:
+                _body = "(unreadable)"
+            raise RuntimeError(f"Turso execute_many HTTP {_e.code}: {_body}") from None
         return
 
     conn = sqlite3.connect(_LOCAL_DB)

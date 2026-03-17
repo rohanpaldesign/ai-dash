@@ -104,8 +104,16 @@ def main() -> None:
         try:
             _run_metrics()
         except Exception as _metrics_err:
-            import traceback as _tb
-            st.warning(f"Metrics computation failed: {_metrics_err}\n\n```\n{_tb.format_exc()}\n```")
+            import urllib.error as _ue
+            if isinstance(_metrics_err, _ue.HTTPError):
+                try:
+                    _turso_body = _metrics_err.read().decode(errors="replace")
+                except Exception:
+                    _turso_body = "(body unreadable)"
+                st.warning(f"Metrics HTTP {_metrics_err.code}: {_turso_body}")
+            else:
+                import traceback as _tb
+                st.warning(f"Metrics error [{type(_metrics_err).__name__}]: {_metrics_err}\n\n```\n{_tb.format_exc()}\n```")
         st.session_state["metrics_computed"] = True
 
     # ── Page state init ────────────────────────────────────────────────────────

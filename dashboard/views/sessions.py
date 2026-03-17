@@ -65,7 +65,7 @@ def page_sessions(config: dict) -> None:
         display["Repo"]     = display["repo"].fillna("—")
         st.dataframe(
             display[["Date", "Start", "Tool", "Duration", "Prompts", "Repo"]].reset_index(drop=True),
-            use_container_width=True,
+            width='stretch',
             hide_index=True,
             height=400,
         )
@@ -88,7 +88,7 @@ def page_sessions(config: dict) -> None:
             opacity=0.75,
         )
         fig.update_layout(height=300, legend_title="Tool", margin=dict(t=4, b=4))
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width='stretch')
 
     # ── Prompts per Session (Claude Code only) ────────────────────────────────
     cc_df = df[df["tool"] == "claude_code"]
@@ -103,7 +103,7 @@ def page_sessions(config: dict) -> None:
             color_discrete_sequence=["#4A9EFF"],
         )
         fig.update_layout(height=260, margin=dict(t=4, b=4))
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width='stretch')
 
     # ── Deep Work ─────────────────────────────────────────────────────────────
     st.divider()
@@ -120,7 +120,7 @@ def page_sessions(config: dict) -> None:
         deep["Repo"]     = deep["repo"].fillna("—")
         st.dataframe(
             deep[["Date", "Start", "Tool", "Duration", "Prompts", "Repo"]].reset_index(drop=True),
-            use_container_width=True,
+            width='stretch',
             hide_index=True,
         )
     else:

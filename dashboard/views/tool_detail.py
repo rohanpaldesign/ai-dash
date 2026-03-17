@@ -60,7 +60,7 @@ def page_tool_detail(tool_id: str, config: dict) -> None:
 
     # ── Period pills + date pickers ────────────────────────────────────────────
     period = st.pills(
-        "", PERIODS, default="Month", key=f"{_pfx}period",
+        "Period", PERIODS, default="Month", key=f"{_pfx}period",
         on_change=_on_period_change, label_visibility="collapsed",
     ) or "Month"
 
@@ -166,7 +166,7 @@ def page_tool_detail(tool_id: str, config: dict) -> None:
     )
     fig.update_traces(hovertemplate="%{y:.1f}<extra></extra>")
     fig.update_layout(height=280, margin=dict(t=4, b=4))
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width='stretch')
 
     # ── Sessions Over Time ────────────────────────────────────────────────────
     st.subheader("Sessions Over Time")
@@ -189,7 +189,7 @@ def page_tool_detail(tool_id: str, config: dict) -> None:
     )
     fig.update_traces(hovertemplate="%{y:.1f}<extra></extra>")
     fig.update_layout(height=240, margin=dict(t=4, b=4))
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width='stretch')
 
     # ── Usage by Hour of Day ──────────────────────────────────────────────────
     st.subheader("Usage by Hour of Day")
@@ -204,7 +204,7 @@ def page_tool_detail(tool_id: str, config: dict) -> None:
         )
         fig.update_traces(hovertemplate="%{y:.1f}<extra></extra>")
         fig.update_layout(height=240, margin=dict(t=4, b=4))
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width='stretch')
     else:
         st.info("No hourly data.")
 
@@ -220,7 +220,7 @@ def page_tool_detail(tool_id: str, config: dict) -> None:
         )
         fig.update_traces(hovertemplate="Duration: %{x:.1f} min<br>Sessions: %{y}<extra></extra>")
         fig.update_layout(height=240, margin=dict(t=4, b=4))
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width='stretch')
 
     # ── Recent Sessions table ─────────────────────────────────────────────────
     st.divider()
@@ -232,7 +232,7 @@ def page_tool_detail(tool_id: str, config: dict) -> None:
         recent["Duration"] = recent["active_seconds"].apply(lambda s: f"{s/60:.1f} min")
         st.dataframe(
             recent[["Date", "Start", "Duration"]].reset_index(drop=True),
-            use_container_width=True,
+            width='stretch',
             hide_index=True,
         )
     else:

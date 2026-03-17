@@ -53,7 +53,7 @@ def page_overview(config: dict) -> None:
 
     # ── Period pills + date pickers ────────────────────────────────────────────
     period = st.pills(
-        "", PERIODS, default="Week", key="ov_period",
+        "Period", PERIODS, default="Week", key="ov_period",
         on_change=_on_ov_period_change, label_visibility="collapsed",
     ) or "Week"
 
@@ -190,7 +190,7 @@ def page_overview(config: dict) -> None:
         barmode="stack", xaxis_title="Date", yaxis_title="Estimated Tokens",
         legend_title="Tool", height=320, margin=dict(t=4, b=4), showlegend=True,
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width='stretch')
 
     st.markdown("**Sessions**")
     fig = go.Figure()
@@ -212,7 +212,7 @@ def page_overview(config: dict) -> None:
         barmode="stack", xaxis_title="Date", yaxis_title="Sessions",
         legend_title="Tool", height=320, margin=dict(t=4, b=4), showlegend=True,
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width='stretch')
 
     st.markdown("**Prompts (Claude Code)**")
     fig = go.Figure()
@@ -233,7 +233,7 @@ def page_overview(config: dict) -> None:
         barmode="stack", xaxis_title="Date", yaxis_title="Prompts",
         legend_title="Tool", height=320, margin=dict(t=4, b=4), showlegend=True,
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width='stretch')
 
     # ── Tool Comparison table ──────────────────────────────────────────────────
     st.divider()
@@ -280,7 +280,7 @@ def page_overview(config: dict) -> None:
 
         st.dataframe(
             pd.DataFrame(rows).set_index("Tool"),
-            use_container_width=True,
+            width='stretch',
         )
     else:
         st.info("No session data for this date range.")
@@ -288,7 +288,7 @@ def page_overview(config: dict) -> None:
     # ── Trend Over Time ────────────────────────────────────────────────────────
     st.subheader("Trend Over Time")
     metric_pill = st.pills(
-        "", ["Active Minutes", "Sessions"], default="Active Minutes",
+        "Metric", ["Active Minutes", "Sessions"], default="Active Minutes",
         key="ov_trend_metric", label_visibility="collapsed",
     ) or "Active Minutes"
 
@@ -319,7 +319,7 @@ def page_overview(config: dict) -> None:
             ))
     fig.update_layout(xaxis_title="Date", yaxis_title=metric_pill,
                       legend_title="Tool", height=320, margin=dict(t=4, b=4))
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width='stretch')
 
     # ── Tool Usage Share ───────────────────────────────────────────────────────
     st.divider()
@@ -353,7 +353,7 @@ def page_overview(config: dict) -> None:
             )
             fig.update_layout(height=300, showlegend=True, legend_title="Tool",
                               margin=dict(t=4, b=4))
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width='stretch')
         else:
             st.info("No data.")
     else:
@@ -364,7 +364,7 @@ def page_overview(config: dict) -> None:
     st.subheader("Usage Heatmap")
     tool_options = ["All"] + [tool_name(t, config) for t in TOOL_ORDER]
     tool_name_to_id = {tool_name(t, config): t for t in TOOL_ORDER}
-    selected = st.pills("", tool_options, default="All",
+    selected = st.pills("Tool filter", tool_options, default="All",
                         key="overview_heat_tool", label_visibility="collapsed") or "All"
 
     if custom_mode:
@@ -407,7 +407,7 @@ def page_overview(config: dict) -> None:
                 ticktext=[f"{h:02d}:00" for h in range(0, 24, 3)],
             )
             fig.update_layout(height=280, margin=dict(t=4, b=4))
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width='stretch')
         else:
             st.info(f"No data for {selected}.")
     else:
@@ -417,7 +417,7 @@ def page_overview(config: dict) -> None:
     st.divider()
     st.subheader("Recent Sessions")
     tool_filter_opts = ["All"] + [tool_name(t, config) for t in TOOL_ORDER]
-    rs_filter = st.pills("", tool_filter_opts, default="All",
+    rs_filter = st.pills("Tool filter", tool_filter_opts, default="All",
                          key="ov_rs_tool_filter", label_visibility="collapsed") or "All"
 
     if not sessions.empty:
@@ -436,7 +436,7 @@ def page_overview(config: dict) -> None:
         recent["Repo"] = recent["repo"].fillna("—")
         st.dataframe(
             recent[["Date", "Start", "Tool", "Duration", "Prompts", "Repo"]].reset_index(drop=True),
-            use_container_width=True,
+            width='stretch',
             hide_index=True,
         )
     else:

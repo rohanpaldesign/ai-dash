@@ -48,7 +48,7 @@ def page_claude_code(config: dict) -> None:
         st.session_state["m_nav_triggered"]  = True
 
     period = st.pills(
-        "", PERIODS, default="Week", key="m_period",
+        "Period", PERIODS, default="Week", key="m_period",
         on_change=_on_period_change, label_visibility="collapsed",
     ) or "Week"
 
@@ -170,7 +170,7 @@ def page_claude_code(config: dict) -> None:
                  color_discrete_sequence=[cc_color])
     fig.update_traces(hovertemplate="%{y:,}<extra></extra>")
     fig.update_layout(height=240, margin=dict(t=4, b=4))
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width='stretch')
 
     st.divider()
 
@@ -199,7 +199,7 @@ def page_claude_code(config: dict) -> None:
                              hovertemplate="%{y:,}<extra></extra>"))
     fig.update_layout(barmode="stack", height=260, legend_title="Type",
                       xaxis_title=x_label, yaxis_title="Tokens", margin=dict(t=4, b=4))
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width='stretch')
     if int(tokens_df["input_tokens"].sum()) == 0:
         st.caption("Token counts appear after a session ends (Stop hook reads the transcript).")
 
@@ -223,7 +223,7 @@ def page_claude_code(config: dict) -> None:
                  color_discrete_sequence=[cc_color])
     fig.update_traces(hovertemplate="%{y:,}<extra></extra>")
     fig.update_layout(height=240, margin=dict(t=4, b=4))
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width='stretch')
 
     st.divider()
 
@@ -245,7 +245,7 @@ def page_claude_code(config: dict) -> None:
             )
             fig.update_traces(hovertemplate="%{x}: %{y:,}<extra></extra>")
             fig.update_layout(height=300, margin=dict(t=4, b=4))
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width='stretch')
         else:
             st.info("No tool call data yet.")
     else:
@@ -279,7 +279,7 @@ def page_claude_code(config: dict) -> None:
             yaxis={"categoryorder": "total ascending"},
             margin=dict(t=4, b=4),
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width='stretch')
     else:
         st.info("No repo data yet. Repo context comes from Claude Code hook events.")
 
@@ -323,6 +323,6 @@ def page_claude_code(config: dict) -> None:
                 height=320,
                 margin=dict(t=4, b=4),
             )
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width='stretch')
     else:
         st.info("No data for commit-after-AI analysis.")

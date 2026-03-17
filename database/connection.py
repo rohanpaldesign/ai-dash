@@ -151,8 +151,6 @@ def execute_many(sql: str, params_list: list) -> None:
         ]
         requests.append({"type": "close"})
         body = json.dumps({"requests": requests}).encode()
-        import sys as _sys
-        _sys.stderr.write(f"[execute_many] first_args={json.dumps([_enc(p) for p in params_list[0]])[:200]}\n")
         req = urllib.request.Request(
             http_url,
             data=body,

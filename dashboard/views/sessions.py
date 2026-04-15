@@ -87,8 +87,9 @@ def page_sessions(config: dict) -> None:
             barmode="overlay",
             opacity=0.75,
         )
-        fig.update_layout(height=300, legend_title="Tool", margin=dict(t=4, b=4))
-        st.plotly_chart(fig, width='stretch')
+        fig.update_layout(height=300, legend_title="Tool", margin=dict(t=4, b=4), font=dict(size=14))
+        fig.update_yaxes(fixedrange=True)
+        st.plotly_chart(fig, config={"scrollZoom": False, "displayModeBar": False}, width='stretch')
 
     # ── Prompts per Session (Claude Code only) ────────────────────────────────
     cc_df = df[df["tool"] == "claude_code"]
@@ -102,8 +103,9 @@ def page_sessions(config: dict) -> None:
             labels={"start_time": "Session Start", "prompt_count": "Prompts"},
             color_discrete_sequence=["#4A9EFF"],
         )
-        fig.update_layout(height=260, margin=dict(t=4, b=4))
-        st.plotly_chart(fig, width='stretch')
+        fig.update_layout(height=260, margin=dict(t=4, b=4), font=dict(size=14))
+        fig.update_yaxes(fixedrange=True)
+        st.plotly_chart(fig, config={"scrollZoom": False, "displayModeBar": False}, width='stretch')
 
     # ── Deep Work ─────────────────────────────────────────────────────────────
     st.divider()

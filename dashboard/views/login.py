@@ -2,7 +2,11 @@
 dashboard/views/login.py — Login / signup page for Alpha 0.2.
 """
 
+from pathlib import Path
+
 import streamlit as st
+
+_logo_path = Path(__file__).parent.parent / "assets" / "siscil-circle-logo.png"
 
 from auth import (
     build_google_auth_url,
@@ -80,7 +84,8 @@ def page_login(cookies) -> None:
     if "auth_view" not in st.session_state:
         st.session_state["auth_view"] = "login"
 
-    st.title("SignalBoard")
+    st.image(str(_logo_path), width=64)
+    st.title("Siscil")
 
     # Centre the form with columns
     _, col, _ = st.columns([1, 2, 1])

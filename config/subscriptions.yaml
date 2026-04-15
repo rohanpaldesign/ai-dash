@@ -10,17 +10,17 @@ tools:
   cursor:
     name: "Cursor"
     monthly_cost: 20.00      # Cursor Pro subscription
-    color: "#4A9EFF"
+    color: "#808080"
 
   chatgpt:
     name: "ChatGPT"
     monthly_cost: 20.00      # ChatGPT Plus subscription
-    color: "#10A37F"
+    color: "#888888"
 
   gemini:
     name: "Gemini"
     monthly_cost: 0.00       # Free tier, or set to 21.99 for Google One AI Premium
-    color: "#4285F4"
+    color: "#1FBFF3"
 
 # Window title patterns for detection (case-insensitive substring match)
 window_patterns:

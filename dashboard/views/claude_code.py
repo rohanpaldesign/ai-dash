@@ -1,6 +1,6 @@
 """dashboard/views/claude_code.py — Claude Code deep-dive page."""
 
-from datetime import date as _date
+from datetime import date as _date, timedelta
 
 import plotly.express as px
 import plotly.graph_objects as go
@@ -14,6 +14,37 @@ from data import (
     load_sessions,
     tool_color,
 )
+
+
+def _ctx_window(period, d_since, d_until, today_pst):
+    """Return (load_since, load_until) — a padded window around the current period."""
+    if period == "Today":
+        return str(today_pst - timedelta(days=29)), str(today_pst)
+    if period == "Week":
+        return str(_date.fromisoformat(d_since) - timedelta(days=21)), str(today_pst)
+    if period == "Month":
+        return str(_date.fromisoformat(d_since) - timedelta(days=31)), str(today_pst)
+    if period == "Year":
+        yr = int(d_since[:4])
+        return f"{yr-1}-01-01", f"{yr+1}-12-31"
+    # All Time — no context needed
+    return d_since, d_until
+
+
+def _to_quarter(date_str: str) -> str:
+    m = int(date_str[5:7])
+    return f"Q{(m-1)//3 + 1} {date_str[:4]}"
+
+
+def _quarter_sort_key(q: str) -> tuple:
+    parts = q.split()
+    return (int(parts[1]), int(parts[0][1]))
+
+
+def _padded_range(d0: str, d1: str, granularity: str):
+    """Add half-bar-width padding so edge bars aren't clipped."""
+    pad = timedelta(days=15) if granularity == "month" else timedelta(days=1)
+    return str(_date.fromisoformat(d0) - pad), str(_date.fromisoformat(d1) + pad)
 
 
 def page_claude_code(config: dict) -> None:
@@ -81,6 +112,8 @@ def page_claude_code(config: dict) -> None:
     custom_since = str(picker_since)
     custom_until = str(picker_until)
 
+    _chart_cfg = {"scrollZoom": False, "displayModeBar": False}
+
     # ── x-axis formatting helper ───────────────────────────────────────────────
     def _fmt_x(df_, col_):
         if granularity == "6h":
@@ -88,11 +121,24 @@ def page_claude_code(config: dict) -> None:
         elif granularity == "hour":
             df_[col_] = df_[col_].astype(int)
         elif granularity == "month":
-            df_[col_] = df_[col_].astype(str)
+            # Keep as YYYY-MM-01 for Plotly date axis; tickformat handles display
             import pandas as pd
-            df_[col_] = pd.to_datetime(df_[col_] + "-01").dt.strftime("%b %Y")
+            df_[col_] = df_[col_].astype(str)
+            df_[col_] = pd.to_datetime(df_[col_] + "-01").dt.strftime("%Y-%m-01")
+        else:  # day granularity
+            df_[col_] = df_[col_].astype(str).str[:10]  # ensure "YYYY-MM-DD" only
 
     x_label = {"6h": "Time Block", "hour": "Hour", "month": "Month"}.get(granularity, "Date")
+
+    # ── Tooltip x-axis format helper ──────────────────────────────────────────
+    if period == "All Time":
+        _hover_x = "%{x}"
+    elif granularity == "month":
+        _hover_x = "%{x|%B %Y}"
+    elif granularity in ("6h", "hour"):
+        _hover_x = "%{x}"
+    else:
+        _hover_x = "%{x|%b %d, %Y}"
 
     # ── Per-chart navigation helper ────────────────────────────────────────────
     def chart_nav(chart_key: str, offset_key: str):
@@ -143,7 +189,7 @@ def page_claude_code(config: dict) -> None:
     total_cache_read = int(kpi_tokens_df["cache_read_tokens"].sum())
     total_edits      = int(kpi_edits_df["edits_accepted"].sum())
 
-    k1, k2, k3, k4, k5 = st.columns(5)
+    k1, k2, k3, k4, k5 = st.columns(5, gap="medium")
     k1.metric("Prompts",        f"{total_prompts:,}")
     k2.metric("Input Tokens",   f"{total_input:,}")
     k3.metric("Output Tokens",  f"{total_output:,}")
@@ -159,18 +205,49 @@ def page_claude_code(config: dict) -> None:
         p_since, p_until = custom_since, custom_until
     else:
         p_since, p_until, _, _ = chart_nav("prompts", "m_offset_prompts")
-    p_data    = load_claude_metrics(p_since, p_until, granularity, user_id)
+
+    if custom_mode:
+        p_load_since, p_load_until = p_since, p_until
+    elif period == "All Time":
+        p_load_since, p_load_until = p_since, p_until
+    elif granularity == "6h":
+        # Today with 6h granularity: leave as-is
+        p_load_since, p_load_until = p_since, p_until
+    else:
+        p_load_since, p_load_until = _ctx_window(period, p_since, p_until, _today_pst)
+
+    p_data    = load_claude_metrics(p_load_since, p_load_until, granularity, user_id)
     p_col     = p_data["col"]
-    prompts_df = _fill_gaps(p_data["prompts"], p_col, granularity, p_since, p_until)
+    prompts_df = _fill_gaps(p_data["prompts"], p_col, granularity, p_load_since, p_load_until)
     if "prompts" not in prompts_df.columns:
         prompts_df["prompts"] = 0
+
+    if period == "All Time" and granularity not in ("6h", "hour", "month"):
+        prompts_df = prompts_df.copy()
+        prompts_df[p_col] = prompts_df[p_col].apply(_to_quarter)
+        import pandas as pd
+        prompts_df = prompts_df.groupby(p_col, as_index=False)["prompts"].sum()
+        prompts_df = prompts_df.sort_values(p_col, key=lambda s: s.map(_quarter_sort_key))
+
+    if period not in ("All Time",) and granularity not in ("6h", "hour"):
+        _f_since = p_since[:7] if granularity == "month" else p_since
+        _f_until = p_until[:7] if granularity == "month" else p_until
+        prompts_df = prompts_df[(prompts_df[p_col] >= _f_since) & (prompts_df[p_col] <= _f_until)]
+
     _fmt_x(prompts_df, p_col)
     fig = px.bar(prompts_df, x=p_col, y="prompts",
                  labels={p_col: x_label, "prompts": "Prompts"},
                  color_discrete_sequence=[cc_color])
-    fig.update_traces(hovertemplate="%{y:,}<extra></extra>")
-    fig.update_layout(height=240, margin=dict(t=4, b=4))
-    st.plotly_chart(fig, width='stretch')
+    fig.update_traces(hovertemplate=f"{_hover_x}: %{{y:,.0f}} prompts<extra></extra>")
+    fig.update_layout(height=240, margin=dict(t=4, b=4), font=dict(size=14), dragmode="pan")
+    if granularity == "month" and period != "All Time":
+        _r0, _r1 = _padded_range(p_since, p_until, granularity)
+        fig.update_xaxes(range=[_r0, _r1], tickformat="%b %Y")
+    elif period not in ("All Time",) and granularity not in ("6h", "hour"):
+        _r0, _r1 = _padded_range(p_since, p_until, granularity)
+        fig.update_xaxes(range=[_r0, _r1], tickformat="%b %d")
+    fig.update_yaxes(fixedrange=True)
+    st.plotly_chart(fig, config=_chart_cfg, width='stretch')
 
     st.divider()
 
@@ -181,12 +258,37 @@ def page_claude_code(config: dict) -> None:
         t_since, t_until = custom_since, custom_until
     else:
         t_since, t_until, _, _ = chart_nav("tokens", "m_offset_tokens")
-    t_data   = load_claude_metrics(t_since, t_until, granularity, user_id)
+
+    if custom_mode:
+        t_load_since, t_load_until = t_since, t_until
+    elif period == "All Time":
+        t_load_since, t_load_until = t_since, t_until
+    elif granularity == "6h":
+        t_load_since, t_load_until = t_since, t_until
+    else:
+        t_load_since, t_load_until = _ctx_window(period, t_since, t_until, _today_pst)
+
+    t_data   = load_claude_metrics(t_load_since, t_load_until, granularity, user_id)
     t_col    = t_data["col"]
-    tokens_df = _fill_gaps(t_data["tokens"], t_col, granularity, t_since, t_until)
+    tokens_df = _fill_gaps(t_data["tokens"], t_col, granularity, t_load_since, t_load_until)
     for _c in ["input_tokens", "output_tokens", "cache_read_tokens", "cache_creation_tokens"]:
         if _c not in tokens_df.columns:
             tokens_df[_c] = 0
+
+    if period == "All Time" and granularity not in ("6h", "hour", "month"):
+        tokens_df = tokens_df.copy()
+        tokens_df[t_col] = tokens_df[t_col].apply(_to_quarter)
+        import pandas as pd
+        tokens_df = tokens_df.groupby(t_col, as_index=False)[
+            ["input_tokens", "output_tokens", "cache_read_tokens", "cache_creation_tokens"]
+        ].sum()
+        tokens_df = tokens_df.sort_values(t_col, key=lambda s: s.map(_quarter_sort_key))
+
+    if period not in ("All Time",) and granularity not in ("6h", "hour"):
+        _f_since = t_since[:7] if granularity == "month" else t_since
+        _f_until = t_until[:7] if granularity == "month" else t_until
+        tokens_df = tokens_df[(tokens_df[t_col] >= _f_since) & (tokens_df[t_col] <= _f_until)]
+
     _fmt_x(tokens_df, t_col)
     fig = go.Figure()
     for series, color, name in [
@@ -196,10 +298,18 @@ def page_claude_code(config: dict) -> None:
         ("cache_creation_tokens", "#EA4335", "Cache Creation"),
     ]:
         fig.add_trace(go.Bar(name=name, x=tokens_df[t_col], y=tokens_df[series], marker_color=color,
-                             hovertemplate="%{y:,}<extra></extra>"))
+                             hovertemplate=f"{_hover_x}: %{{y:,.0f}} tokens<extra></extra>"))
     fig.update_layout(barmode="stack", height=260, legend_title="Type",
-                      xaxis_title=x_label, yaxis_title="Tokens", margin=dict(t=4, b=4))
-    st.plotly_chart(fig, width='stretch')
+                      xaxis_title=x_label, yaxis_title="Tokens", margin=dict(t=4, b=4),
+                      font=dict(size=14), dragmode="pan")
+    if granularity == "month" and period != "All Time":
+        _r0, _r1 = _padded_range(t_since, t_until, granularity)
+        fig.update_xaxes(range=[_r0, _r1], tickformat="%b %Y")
+    elif period not in ("All Time",) and granularity not in ("6h", "hour"):
+        _r0, _r1 = _padded_range(t_since, t_until, granularity)
+        fig.update_xaxes(range=[_r0, _r1], tickformat="%b %d")
+    fig.update_yaxes(fixedrange=True)
+    st.plotly_chart(fig, config=_chart_cfg, width='stretch')
     if int(tokens_df["input_tokens"].sum()) == 0:
         st.caption("Token counts appear after a session ends (Stop hook reads the transcript).")
 
@@ -212,18 +322,48 @@ def page_claude_code(config: dict) -> None:
         e_since, e_until = custom_since, custom_until
     else:
         e_since, e_until, _, _ = chart_nav("edits", "m_offset_edits")
-    e_data   = load_claude_metrics(e_since, e_until, granularity, user_id)
+
+    if custom_mode:
+        e_load_since, e_load_until = e_since, e_until
+    elif period == "All Time":
+        e_load_since, e_load_until = e_since, e_until
+    elif granularity == "6h":
+        e_load_since, e_load_until = e_since, e_until
+    else:
+        e_load_since, e_load_until = _ctx_window(period, e_since, e_until, _today_pst)
+
+    e_data   = load_claude_metrics(e_load_since, e_load_until, granularity, user_id)
     e_col    = e_data["col"]
-    edits_df  = _fill_gaps(e_data["edits"], e_col, granularity, e_since, e_until)
+    edits_df  = _fill_gaps(e_data["edits"], e_col, granularity, e_load_since, e_load_until)
     if "edits_accepted" not in edits_df.columns:
         edits_df["edits_accepted"] = 0
+
+    if period == "All Time" and granularity not in ("6h", "hour", "month"):
+        edits_df = edits_df.copy()
+        edits_df[e_col] = edits_df[e_col].apply(_to_quarter)
+        import pandas as pd
+        edits_df = edits_df.groupby(e_col, as_index=False)["edits_accepted"].sum()
+        edits_df = edits_df.sort_values(e_col, key=lambda s: s.map(_quarter_sort_key))
+
+    if period not in ("All Time",) and granularity not in ("6h", "hour"):
+        _f_since = e_since[:7] if granularity == "month" else e_since
+        _f_until = e_until[:7] if granularity == "month" else e_until
+        edits_df = edits_df[(edits_df[e_col] >= _f_since) & (edits_df[e_col] <= _f_until)]
+
     _fmt_x(edits_df, e_col)
     fig = px.bar(edits_df, x=e_col, y="edits_accepted",
                  labels={e_col: x_label, "edits_accepted": "Edits"},
                  color_discrete_sequence=[cc_color])
-    fig.update_traces(hovertemplate="%{y:,}<extra></extra>")
-    fig.update_layout(height=240, margin=dict(t=4, b=4))
-    st.plotly_chart(fig, width='stretch')
+    fig.update_traces(hovertemplate=f"{_hover_x}: %{{y:,.0f}} edits<extra></extra>")
+    fig.update_layout(height=240, margin=dict(t=4, b=4), font=dict(size=14), dragmode="pan")
+    if granularity == "month" and period != "All Time":
+        _r0, _r1 = _padded_range(e_since, e_until, granularity)
+        fig.update_xaxes(range=[_r0, _r1], tickformat="%b %Y")
+    elif period not in ("All Time",) and granularity not in ("6h", "hour"):
+        _r0, _r1 = _padded_range(e_since, e_until, granularity)
+        fig.update_xaxes(range=[_r0, _r1], tickformat="%b %d")
+    fig.update_yaxes(fixedrange=True)
+    st.plotly_chart(fig, config=_chart_cfg, width='stretch')
 
     st.divider()
 
@@ -244,8 +384,9 @@ def page_claude_code(config: dict) -> None:
                 color_discrete_sequence=[cc_color],
             )
             fig.update_traces(hovertemplate="%{x}: %{y:,}<extra></extra>")
-            fig.update_layout(height=300, margin=dict(t=4, b=4))
-            st.plotly_chart(fig, width='stretch')
+            fig.update_layout(height=300, margin=dict(t=4, b=4), font=dict(size=14))
+            fig.update_yaxes(fixedrange=True)
+            st.plotly_chart(fig, config=_chart_cfg, width='stretch')
         else:
             st.info("No tool call data yet.")
     else:
@@ -278,8 +419,10 @@ def page_claude_code(config: dict) -> None:
             height=max(200, len(repo_time) * 30),
             yaxis={"categoryorder": "total ascending"},
             margin=dict(t=4, b=4),
+            font=dict(size=14),
         )
-        st.plotly_chart(fig, width='stretch')
+        fig.update_yaxes(fixedrange=True)
+        st.plotly_chart(fig, config=_chart_cfg, width='stretch')
     else:
         st.info("No repo data yet. Repo context comes from Claude Code hook events.")
 
@@ -308,13 +451,13 @@ def page_claude_code(config: dict) -> None:
             fig.add_trace(go.Bar(
                 x=session_daily["date"], y=session_daily["sessions"],
                 name="AI Sessions", marker_color="#4A9EFF", opacity=0.7,
-                hovertemplate="%{y}<extra></extra>",
+                hovertemplate="%{x|%b %d, %Y}: %{y} sessions<extra></extra>",
             ))
             fig.add_trace(go.Scatter(
                 x=commit_daily["date"], y=commit_daily["commits"],
                 name="Commits", mode="lines+markers",
                 line=dict(color="#F4B400", width=2), yaxis="y2",
-                hovertemplate="%{y}<extra></extra>",
+                hovertemplate="%{x|%b %d, %Y}: %{y} commits<extra></extra>",
             ))
             fig.update_layout(
                 yaxis=dict(title="AI Sessions"),
@@ -322,7 +465,9 @@ def page_claude_code(config: dict) -> None:
                 legend_title="Metric",
                 height=320,
                 margin=dict(t=4, b=4),
+                font=dict(size=14),
             )
-            st.plotly_chart(fig, width='stretch')
+            fig.update_yaxes(fixedrange=True)
+            st.plotly_chart(fig, config=_chart_cfg, width='stretch')
     else:
         st.info("No data for commit-after-AI analysis.")

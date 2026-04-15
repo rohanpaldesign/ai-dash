@@ -13,7 +13,7 @@ from data import (
 )
 
 
-def page_settings(config: dict) -> None:
+def page_settings(config: dict, cookies=None) -> None:
     st.title("Settings")
 
     user = st.session_state["user"]
@@ -116,6 +116,22 @@ def page_settings(config: dict) -> None:
             st.success(f"Reset link sent to {email}. Check your inbox.")
         except Exception as exc:
             st.error(f"Failed to send reset email: {exc}")
+
+    st.divider()
+
+    # ── Appearance ────────────────────────────────────────────────────────────
+    st.subheader("Appearance")
+    theme_options = ["system", "light", "dark"]
+    current_theme = st.session_state.get("theme_pref", "system")
+    selected_theme = st.pills(
+        "Theme", theme_options, default=current_theme,
+        key="settings_theme_pill", label_visibility="collapsed",
+    )
+    if selected_theme and selected_theme != current_theme:
+        st.session_state["theme_pref"] = selected_theme
+        if cookies is not None:
+            cookies.set("sb_theme", selected_theme, max_age=365 * 86400)
+        st.rerun()
 
     st.divider()
 

@@ -1,7 +1,7 @@
 """dashboard/views/overview.py — Overview page."""
 
 from datetime import date as _date
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import pandas as pd
@@ -22,6 +22,70 @@ from data import (
 
 _LA_TZ = ZoneInfo("America/Los_Angeles")
 PERIODS = ["Today", "Week", "Month", "Year", "All Time"]
+
+
+def _ctx_window(period, d_since, d_until, today_pst):
+    """Return (load_since, load_until) — a padded window around the current period."""
+    if period == "Today":
+        return str(today_pst - timedelta(days=29)), str(today_pst)
+    if period == "Week":
+        return str(_date.fromisoformat(d_since) - timedelta(days=21)), str(today_pst)
+    if period == "Month":
+        return str(_date.fromisoformat(d_since) - timedelta(days=31)), str(today_pst)
+    if period == "Year":
+        yr = int(d_since[:4])
+        return f"{yr-1}-01-01", f"{yr+1}-12-31"
+    # All Time — no context needed
+    return d_since, d_until
+
+
+def _to_quarter(date_str: str) -> str:
+    m = int(date_str[5:7])
+    return f"Q{(m-1)//3 + 1} {date_str[:4]}"
+
+
+def _quarter_sort_key(q: str) -> tuple:
+    parts = q.split()
+    return (int(parts[1]), int(parts[0][1]))
+
+
+def _padded_range(d0: str, d1: str, granularity: str):
+    """Add half-bar-width padding so edge bars aren't clipped."""
+    pad = timedelta(days=15) if granularity == "month" else timedelta(days=1)
+    return str(_date.fromisoformat(d0) - pad), str(_date.fromisoformat(d1) + pad)
+
+
+def _expand_sessions_hourly(df: pd.DataFrame) -> pd.DataFrame:
+    """Expand each session into per-hour rows, distributing active_minutes proportionally."""
+    if df.empty:
+        return pd.DataFrame(columns=["date", "weekday", "hour", "active_minutes"])
+    rows = []
+    for _, sess in df.iterrows():
+        start = sess["start_time"]
+        active_secs = float(sess["active_seconds"] or 0)
+        if pd.isna(start) or active_secs <= 0:
+            continue
+        end = start + pd.Timedelta(seconds=active_secs)
+        db_end = sess.get("end_time")
+        if pd.notna(db_end) and db_end > start:
+            end = db_end
+        start_pst = start.astimezone(_LA_TZ)
+        end_pst = end.astimezone(_LA_TZ)
+        slot = start_pst.replace(minute=0, second=0, microsecond=0)
+        while slot < end_pst:
+            slot_end = slot + pd.Timedelta(hours=1)
+            overlap_min = (min(end_pst, slot_end) - max(start_pst, slot)).total_seconds() / 60
+            if overlap_min > 0:
+                rows.append({
+                    "date":           slot.date(),
+                    "weekday":        slot.strftime("%A"),
+                    "hour":           slot.hour,
+                    "active_minutes": overlap_min,
+                })
+            slot = slot_end
+    return pd.DataFrame(rows) if rows else pd.DataFrame(
+        columns=["date", "weekday", "hour", "active_minutes"]
+    )
 
 
 def page_overview(config: dict) -> None:
@@ -70,6 +134,8 @@ def page_overview(config: dict) -> None:
     _all_zero = all(st.session_state[k] == 0 for k in ("ov_offset_daily", "ov_offset_share", "ov_offset_heatmap", "ov_offset_trend"))
     custom_mode = _all_zero and (picker_since != base_since or picker_until != base_until)
     custom_since, custom_until = str(picker_since), str(picker_until)
+
+    _chart_cfg = {"scrollZoom": False, "displayModeBar": False}
 
     # ── Per-chart nav helper ───────────────────────────────────────────────────
     def chart_nav(chart_key, offset_key):
@@ -129,15 +195,38 @@ def page_overview(config: dict) -> None:
     else:
         d_since, d_until = chart_nav("daily", "ov_offset_daily")
 
-    d_query_until = str(min(_date.fromisoformat(d_until), _today_pst))
-    daily = load_daily_metrics_range(d_since, d_query_until, user_id)
+    if custom_mode:
+        d_load_since, d_load_until = d_since, str(min(_date.fromisoformat(d_until), _today_pst))
+    elif period == "All Time":
+        d_load_since, d_load_until = d_since, d_until
+    else:
+        d_load_since, d_load_until = _ctx_window(period, d_since, d_until, _today_pst)
+    daily = load_daily_metrics_range(d_load_since, d_load_until, user_id)
 
-    # For Year/All Time use monthly buckets so bars aren't microscopic
-    if granularity == "month":
-        full_dates = [str(p) for p in pd.period_range(d_since, d_until, freq="M")]
+    # Tooltip x-axis format
+    if period == "All Time":
+        _hover_x_daily = "%{x}"
+    elif granularity == "month":
+        _hover_x_daily = "%{x|%B %Y}"
+    else:
+        _hover_x_daily = "%{x|%b %d, %Y}"
+
+    # For Year use monthly buckets; for All Time use quarterly buckets
+    if period == "All Time":
         if not daily.empty:
             daily = daily.copy()
-            daily["date"] = daily["date"].str[:7]  # "YYYY-MM-DD" → "YYYY-MM"
+            daily["date"] = daily["date"].apply(_to_quarter)
+            daily = daily.groupby(["date", "tool"], as_index=False)[
+                ["session_count", "estimated_tokens", "prompt_count", "active_minutes"]
+            ].sum()
+        all_quarters = sorted(daily["date"].unique().tolist(), key=_quarter_sort_key) if not daily.empty else []
+        full_dates = all_quarters
+    elif granularity == "month":
+        daily_dates_raw = [f"{str(p)}-01" for p in pd.period_range(d_since, d_until, freq="M")]
+        full_dates = daily_dates_raw
+        if not daily.empty:
+            daily = daily.copy()
+            daily["date"] = daily["date"].str[:7] + "-01"  # "YYYY-MM-DD" → "YYYY-MM-01"
             daily = daily.groupby(["date", "tool"], as_index=False)[
                 ["session_count", "estimated_tokens", "prompt_count", "active_minutes"]
             ].sum()
@@ -183,14 +272,22 @@ def page_overview(config: dict) -> None:
                 text=vals.apply(lambda v: f"{v:,.0f}" if v > 0 else ""),
                 textposition="inside",
                 insidetextanchor="middle",
-                textfont=dict(size=10),
-                hovertemplate="%{y:,.0f} tokens<extra></extra>",
+                textfont=dict(size=12),
+                hovertemplate=f"{_hover_x_daily}: %{{y:,.0f}} tokens<extra></extra>",
             ))
     fig.update_layout(
         barmode="stack", xaxis_title="Date", yaxis_title="Estimated Tokens",
         legend_title="Tool", height=320, margin=dict(t=4, b=4), showlegend=True,
+        font=dict(size=14), dragmode="pan",
     )
-    st.plotly_chart(fig, width='stretch')
+    if granularity == "month" and period != "All Time":
+        _r0, _r1 = _padded_range(d_since, d_until, granularity)
+        fig.update_xaxes(range=[_r0, _r1], tickformat="%b %Y")
+    elif period not in ("All Time",):
+        _r0, _r1 = _padded_range(d_since, d_until, granularity)
+        fig.update_xaxes(range=[_r0, _r1], tickformat="%b %d")
+    fig.update_yaxes(fixedrange=True)
+    st.plotly_chart(fig, config=_chart_cfg, width='stretch')
 
     st.markdown("**Sessions**")
     fig = go.Figure()
@@ -205,14 +302,22 @@ def page_overview(config: dict) -> None:
                 text=vals.apply(lambda v: f"{int(v)}" if v > 0 else ""),
                 textposition="inside",
                 insidetextanchor="middle",
-                textfont=dict(size=10),
-                hovertemplate="%{y}<extra></extra>",
+                textfont=dict(size=12),
+                hovertemplate=f"{_hover_x_daily}: %{{y:,.0f}} sessions<extra></extra>",
             ))
     fig.update_layout(
         barmode="stack", xaxis_title="Date", yaxis_title="Sessions",
         legend_title="Tool", height=320, margin=dict(t=4, b=4), showlegend=True,
+        font=dict(size=14), dragmode="pan",
     )
-    st.plotly_chart(fig, width='stretch')
+    if granularity == "month" and period != "All Time":
+        _r0, _r1 = _padded_range(d_since, d_until, granularity)
+        fig.update_xaxes(range=[_r0, _r1], tickformat="%b %Y")
+    elif period not in ("All Time",):
+        _r0, _r1 = _padded_range(d_since, d_until, granularity)
+        fig.update_xaxes(range=[_r0, _r1], tickformat="%b %d")
+    fig.update_yaxes(fixedrange=True)
+    st.plotly_chart(fig, config=_chart_cfg, width='stretch')
 
     st.markdown("**Prompts (Claude Code)**")
     fig = go.Figure()
@@ -226,14 +331,22 @@ def page_overview(config: dict) -> None:
             text=vals.apply(lambda v: f"{int(v)}" if v > 0 else ""),
             textposition="inside",
             insidetextanchor="middle",
-            textfont=dict(size=10),
-            hovertemplate="%{y}<extra></extra>",
+            textfont=dict(size=12),
+            hovertemplate=f"{_hover_x_daily}: %{{y:,.0f}} prompts<extra></extra>",
         ))
     fig.update_layout(
         barmode="stack", xaxis_title="Date", yaxis_title="Prompts",
         legend_title="Tool", height=320, margin=dict(t=4, b=4), showlegend=True,
+        font=dict(size=14), dragmode="pan",
     )
-    st.plotly_chart(fig, width='stretch')
+    if granularity == "month" and period != "All Time":
+        _r0, _r1 = _padded_range(d_since, d_until, granularity)
+        fig.update_xaxes(range=[_r0, _r1], tickformat="%b %Y")
+    elif period not in ("All Time",):
+        _r0, _r1 = _padded_range(d_since, d_until, granularity)
+        fig.update_xaxes(range=[_r0, _r1], tickformat="%b %d")
+    fig.update_yaxes(fixedrange=True)
+    st.plotly_chart(fig, config=_chart_cfg, width='stretch')
 
     # ── Tool Comparison table ──────────────────────────────────────────────────
     st.divider()
@@ -298,14 +411,41 @@ def page_overview(config: dict) -> None:
     else:
         t_since, t_until = chart_nav("trend", "ov_offset_trend")
 
-    t_query_until = str(min(_date.fromisoformat(t_until), _today_pst))
-    trend_daily = load_daily_metrics_range(t_since, t_query_until, user_id)
-    if granularity == "month" and not trend_daily.empty:
+    if custom_mode:
+        t_load_since, t_load_until = t_since, str(min(_date.fromisoformat(t_until), _today_pst))
+    elif period == "All Time":
+        t_load_since, t_load_until = t_since, t_until
+    else:
+        t_load_since, t_load_until = _ctx_window(period, t_since, t_until, _today_pst)
+    trend_daily = load_daily_metrics_range(t_load_since, t_load_until, user_id)
+
+    # Tooltip x-axis format for trend
+    if period == "All Time":
+        _hover_x_trend = "%{x}"
+    elif granularity == "month":
+        _hover_x_trend = "%{x|%B %Y}"
+    else:
+        _hover_x_trend = "%{x|%b %d, %Y}"
+
+    if period == "All Time":
+        if not trend_daily.empty:
+            trend_daily = trend_daily.copy()
+            trend_daily["date"] = trend_daily["date"].apply(_to_quarter)
+            trend_daily = trend_daily.groupby(["date", "tool"], as_index=False)[
+                ["active_minutes", "session_count"]
+            ].sum()
+    elif granularity == "month" and not trend_daily.empty:
         trend_daily = trend_daily.copy()
-        trend_daily["date"] = trend_daily["date"].str[:7]
+        trend_daily["date"] = trend_daily["date"].str[:7] + "-01"
         trend_daily = trend_daily.groupby(["date", "tool"], as_index=False)[
             ["active_minutes", "session_count"]
         ].sum()
+
+    if period not in ("All Time",) and not trend_daily.empty:
+        _tf_since = t_since[:7] + "-01" if granularity == "month" else t_since
+        _tf_until = t_until[:7] + "-01" if granularity == "month" else t_until
+        trend_daily = trend_daily[(trend_daily["date"] >= _tf_since) & (trend_daily["date"] <= _tf_until)]
+
     val_col = "active_minutes" if metric_pill == "Active Minutes" else "session_count"
     fig = go.Figure()
     for tool in TOOL_ORDER:
@@ -316,10 +456,19 @@ def page_overview(config: dict) -> None:
                 name=tool_name(tool, config),
                 mode="lines+markers",
                 line=dict(color=tool_color(tool, config), width=2),
+                hovertemplate=f"{_hover_x_trend}: %{{y:,.0f}}<extra></extra>",
             ))
     fig.update_layout(xaxis_title="Date", yaxis_title=metric_pill,
-                      legend_title="Tool", height=320, margin=dict(t=4, b=4))
-    st.plotly_chart(fig, width='stretch')
+                      legend_title="Tool", height=320, margin=dict(t=4, b=4),
+                      font=dict(size=14), dragmode="pan")
+    if granularity == "month" and period != "All Time":
+        _r0, _r1 = _padded_range(t_since, t_until, granularity)
+        fig.update_xaxes(range=[_r0, _r1], tickformat="%b %Y")
+    elif period not in ("All Time",):
+        _r0, _r1 = _padded_range(t_since, t_until, granularity)
+        fig.update_xaxes(range=[_r0, _r1], tickformat="%b %d")
+    fig.update_yaxes(fixedrange=True)
+    st.plotly_chart(fig, config=_chart_cfg, width='stretch')
 
     # ── Tool Usage Share ───────────────────────────────────────────────────────
     st.divider()
@@ -330,10 +479,21 @@ def page_overview(config: dict) -> None:
     else:
         s_since, s_until = chart_nav("share", "ov_offset_share")
 
-    s_query_until = str(min(_date.fromisoformat(s_until), _today_pst))
-    share_daily = load_daily_metrics_range(s_since, s_query_until, user_id)
+    if custom_mode:
+        s_load_since, s_load_until = s_since, str(min(_date.fromisoformat(s_until), _today_pst))
+    elif period == "All Time":
+        s_load_since, s_load_until = s_since, s_until
+    else:
+        s_load_since, s_load_until = _ctx_window(period, s_since, s_until, _today_pst)
+    share_daily = load_daily_metrics_range(s_load_since, s_load_until, user_id)
     if not share_daily.empty:
-        share = share_daily.groupby("tool")["active_minutes"].sum().reset_index()
+        if custom_mode or period not in ("All Time",):
+            share_filtered = share_daily[
+                (share_daily["date"] >= s_since) & (share_daily["date"] <= s_until)
+            ]
+        else:
+            share_filtered = share_daily
+        share = share_filtered.groupby("tool")["active_minutes"].sum().reset_index()
         share = share[share["active_minutes"] > 0]
         share["tool_name"] = share["tool"].apply(lambda t: tool_name(t, config))
         if not share.empty:
@@ -352,8 +512,9 @@ def page_overview(config: dict) -> None:
                 hovertemplate="%{label}: %{value:.1f} min (%{percent})<extra></extra>",
             )
             fig.update_layout(height=300, showlegend=True, legend_title="Tool",
-                              margin=dict(t=4, b=4))
-            st.plotly_chart(fig, width='stretch')
+                              margin=dict(t=4, b=4), font=dict(size=14))
+            fig.update_yaxes(fixedrange=True)
+            st.plotly_chart(fig, config=_chart_cfg, width='stretch')
         else:
             st.info("No data.")
     else:
@@ -373,41 +534,51 @@ def page_overview(config: dict) -> None:
     else:
         h_since, h_until = chart_nav("heatmap", "ov_offset_heatmap")
 
-    h_query_until = str(min(_date.fromisoformat(h_until), _today_pst))
-    heat_sessions = load_sessions_range(h_since, h_query_until, user_id)
+    if custom_mode:
+        h_load_since, h_load_until = h_since, str(min(_date.fromisoformat(h_until), _today_pst))
+    elif period == "All Time":
+        h_load_since, h_load_until = h_since, h_until
+    else:
+        h_load_since, h_load_until = _ctx_window(period, h_since, h_until, _today_pst)
+    heat_sessions = load_sessions_range(h_load_since, h_load_until, user_id)
     if not heat_sessions.empty:
         df = heat_sessions.copy()
+        if not custom_mode and period not in ("All Time",):
+            df = df[(df["date"] >= _date.fromisoformat(h_since)) & (df["date"] <= _date.fromisoformat(h_until))]
         if selected != "All":
             df = df[df["tool"] == tool_name_to_id[selected]]
 
         if not df.empty:
-            df["weekday"] = pd.Categorical(df["weekday"], categories=WEEKDAY_ORDER, ordered=True)
-            # Cap per (date, weekday, hour) at 60 before summing across days —
-            # multiple tools can overlap within the same hour but real time is still ≤ 60 min
-            per_day = df.groupby(["date", "weekday", "hour"], observed=True)["active_minutes"].sum().reset_index()
-            per_day["active_minutes"] = per_day["active_minutes"].clip(upper=60)
-            pivot_h = per_day.groupby(["weekday", "hour"], observed=True)["active_minutes"].sum().reset_index()
-            pivot_h = pivot_h.pivot_table(index="weekday", columns="hour", values="active_minutes", aggfunc="sum", fill_value=0)
-            pivot_h = pivot_h.reindex(WEEKDAY_ORDER).fillna(0)
-            for h in range(24):
-                if h not in pivot_h.columns:
-                    pivot_h[h] = 0
-            pivot_h = pivot_h[sorted(pivot_h.columns)]
+            hourly = _expand_sessions_hourly(df)
+            if hourly.empty:
+                st.info(f"No data for {selected}.")
+            else:
+                hourly["weekday"] = pd.Categorical(hourly["weekday"], categories=WEEKDAY_ORDER, ordered=True)
+                per_day = hourly.groupby(["date", "weekday", "hour"], observed=True)["active_minutes"].sum().reset_index()
+                per_day["active_minutes"] = per_day["active_minutes"].clip(upper=60)
+                pivot_h = per_day.groupby(["weekday", "hour"], observed=True)["active_minutes"].sum().reset_index()
+                pivot_h = pivot_h.pivot_table(index="weekday", columns="hour", values="active_minutes", aggfunc="sum", fill_value=0)
+                pivot_h = pivot_h.reindex(WEEKDAY_ORDER).fillna(0)
+                for h in range(24):
+                    if h not in pivot_h.columns:
+                        pivot_h[h] = 0
+                pivot_h = pivot_h[sorted(pivot_h.columns)]
 
-            fig = px.imshow(
-                pivot_h,
-                labels={"x": "Hour", "y": "Day", "color": "Active Min"},
-                color_continuous_scale="Blues",
-                aspect="auto",
-                text_auto=".1f",
-            )
-            fig.update_traces(hovertemplate="Day: %{y}<br>Hour: %{x}<br>%{z:.1f} min<extra></extra>")
-            fig.update_xaxes(
-                tickvals=list(range(0, 24, 3)),
-                ticktext=[f"{h:02d}:00" for h in range(0, 24, 3)],
-            )
-            fig.update_layout(height=280, margin=dict(t=4, b=4))
-            st.plotly_chart(fig, width='stretch')
+                fig = px.imshow(
+                    pivot_h,
+                    labels={"x": "Hour", "y": "Day", "color": "Active Min"},
+                    color_continuous_scale="Blues",
+                    aspect="auto",
+                    text_auto=".1f",
+                )
+                fig.update_traces(hovertemplate="Day: %{y}<br>Hour: %{x}<br>%{z:.1f} min<extra></extra>")
+                fig.update_xaxes(
+                    tickvals=list(range(0, 24, 3)),
+                    ticktext=[f"{h:02d}:00" for h in range(0, 24, 3)],
+                )
+                fig.update_layout(height=280, margin=dict(t=4, b=4), font=dict(size=14))
+                fig.update_yaxes(fixedrange=True)
+                st.plotly_chart(fig, config=_chart_cfg, width='stretch')
         else:
             st.info(f"No data for {selected}.")
     else:
